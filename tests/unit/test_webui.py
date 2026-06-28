@@ -1,4 +1,5 @@
 import json
+import tomllib
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -11,7 +12,12 @@ from kraken_bot.reporting.csv_export import CsvExporter
 from kraken_bot.reporting.pnl import PnLCalculator
 from kraken_bot.services.reporting_service import DefaultReportingService
 from kraken_bot.services.status_service import StatusService
-from kraken_bot.webui import build_app, render_dashboard
+from kraken_bot.webui import _format_rule_detail, build_app, render_dashboard
+
+
+def app_version() -> str:
+    pyproject = tomllib.loads((Path(__file__).resolve().parents[2] / "pyproject.toml").read_text(encoding="utf-8"))
+    return pyproject["project"]["version"]
 
 
 class DummyExchange:
@@ -215,6 +221,7 @@ def test_api_status_returns_json(tmp_path: Path) -> None:
     payload = json.loads(body)
     assert collected["status"] == "200 OK"
     assert payload["asset"] == "XBT/EUR"
+    assert payload["app_version"] == app_version()
     assert payload["latest_strategy_decision"]["decision"] == "BUY"
     assert payload["report_metrics"]["net_profit"] == "0.48"
     assert payload["runtime"]["polling_interval_seconds"] == 30
@@ -236,6 +243,7 @@ def test_render_dashboard_function_produces_html(tmp_path: Path) -> None:
     assert "kraken-open-1" in dashboard
     assert "Live Market Chart" in dashboard
     assert "price-label" in dashboard
+    assert f"App Version: <span id=\"dashboard-app-version\">{app_version()}</span>" in dashboard
 
 
 def test_render_dashboard_formats_runtime_timestamps_in_local_time(tmp_path: Path) -> None:
@@ -299,6 +307,14 @@ def test_render_dashboard_trims_market_indicator_precision(tmp_path: Path) -> No
     assert "100.123456" not in dashboard
     assert "99.987654" not in dashboard
     assert "1.357891" not in dashboard
+
+
+def test_format_rule_detail_trims_embedded_precision_variants() -> None:
+    detail = "price .123456 / drift -0.000123 / ema50 70.80229906164694015395412320 / tiny 1E-7"
+
+    formatted = _format_rule_detail(detail)
+
+    assert formatted == "price 0.12 / drift -0.00 / ema50 70.80 / tiny 0.00"
 
 
 def test_api_status_includes_exchange_open_orders(tmp_path: Path) -> None:

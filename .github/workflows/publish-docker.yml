@@ -1,0 +1,100 @@
+name: Publish Docker Image
+
+on:
+  push:
+    branches:
+      - production
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Derive image metadata from pyproject.toml
+        id: meta
+        run: |
+          python <<'PY'
+          import os
+          import tomllib
+          from pathlib import Path
+
+          data = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+          version = data["project"]["version"].strip()
+          repository = os.environ["GITHUB_REPOSITORY"].lower()
+          image = f"ghcr.io/{repository}"
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"version={version}\n")
+              fh.write(f"image={image}\n")
+          PY
+
+      - name: Ensure version was increased
+        if: github.event.before != '0000000000000000000000000000000000000000'
+        env:
+          CURRENT_VERSION: ${{ steps.meta.outputs.version }}
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          python <<'PY'
+          import os
+          import subprocess
+          import sys
+          import tomllib
+
+          current_version = os.environ["CURRENT_VERSION"]
+          before_sha = os.environ["BEFORE_SHA"]
+
+          previous_pyproject = subprocess.check_output(
+              ["git", "show", f"{before_sha}:pyproject.toml"],
+              text=True,
+          )
+          previous_version = tomllib.loads(previous_pyproject)["project"]["version"].strip()
+
+          def parse(version: str) -> tuple[int, ...]:
+              try:
+                  return tuple(int(part) for part in version.split("."))
+              except ValueError as exc:
+                  raise SystemExit(
+                      f"Unsupported version format '{version}'. Expected numeric dot-separated segments."
+                  ) from exc
+
+          if parse(current_version) <= parse(previous_version):
+              raise SystemExit(
+                  f"Version must be increased before publishing production. "
+                  f"Current version: {current_version}; previous production version: {previous_version}."
+              )
+
+          print(
+              f"Version check passed. Current version {current_version} is greater than {previous_version}."
+          )
+          PY
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.meta.outputs.version }}

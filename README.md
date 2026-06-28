@@ -194,6 +194,38 @@ Run the unit tests with:
 .venv/bin/pytest
 ```
 
+## Docker
+
+The repository includes a `Dockerfile` and `docker-compose.yml` for running the bot with the config and SQLite database kept outside the image.
+
+Create host directories for runtime files:
+
+```bash
+mkdir -p config data
+cp config.yaml config/config.yaml
+```
+
+For Docker, set the database path in `config/config.yaml` to a path under `/data`, for example:
+
+```yaml
+database:
+  path: "/data/bot.sqlite"
+```
+
+Then start the bot:
+
+```bash
+docker compose up --build
+```
+
+The compose file:
+
+- runs the web UI on `0.0.0.0:8080`
+- starts the background bot loop with `--with-bot-loop`
+- exposes the dashboard at `http://127.0.0.1:8080`
+- mounts `./config` to `/config` read-only
+- mounts `./data` to `/data` read-write
+
 ## Notes On Design
 
 - all money values use `decimal.Decimal`

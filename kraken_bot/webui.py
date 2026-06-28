@@ -4,11 +4,13 @@ import argparse
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
 from decimal import Decimal
+from functools import cache
 import html
 import json
 from http import HTTPStatus
 from pathlib import Path
 import re
+import tomllib
 from wsgiref.simple_server import make_server
 
 from kraken_bot.app.config import BotConfig
@@ -17,6 +19,23 @@ from kraken_bot.app.runner import BotLoopController, BotRunner
 from kraken_bot.exchange.kraken_adapter import KrakenApiError
 from kraken_bot.services.market_data_service import calculate_ema
 from kraken_bot.services.status_service import BotStatus, StatusService
+
+_RULE_DETAIL_NUMBER_PATTERN = re.compile(r"(?<![\w.])[-+]?(?:\d+\.\d{3,}|\.\d{3,}|\d+(?:\.\d+)?[eE][-+]?\d+)")
+
+
+@cache
+def _app_version() -> str:
+    pyproject_path = Path(__file__).resolve().parent.parent / "pyproject.toml"
+    try:
+        payload = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, tomllib.TOMLDecodeError):
+        return "unknown"
+    project = payload.get("project")
+    if isinstance(project, dict):
+        version = project.get("version")
+        if isinstance(version, str) and version.strip():
+            return version.strip()
+    return "unknown"
 
 
 def _format_local_datetime(value: object) -> str:
@@ -73,7 +92,7 @@ def _format_rule_detail(detail: str) -> str:
         value = Decimal(match.group(0))
         return format(value.quantize(Decimal("0.01")), "f")
 
-    return re.sub(r"-?\d+\.\d{3,}", replace_decimal, detail)
+    return _RULE_DETAIL_NUMBER_PATTERN.sub(replace_decimal, detail)
 
 
 def _render_rule_row(label: str, state: str, detail: str) -> str:
@@ -468,6 +487,7 @@ def render_dashboard(
         if status.exchange_open_orders_error is None
         else f"Kraken fetch error: {html.escape(status.exchange_open_orders_error)}"
     )
+    app_version = _app_version()
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -856,7 +876,10 @@ def render_dashboard(
     <section class="section">
       <h2>Recent Logs</h2>
       {recent_logs}
-      <div class="footer" id="dashboard-footer">Refreshed at {html.escape(status.generated_at.isoformat())} · Timezone: {html.escape(timezone_label)}</div>
+      <div class="footer" id="dashboard-footer">
+        <span id="dashboard-refresh-meta">Refreshed at {html.escape(status.generated_at.isoformat())} · Timezone: {html.escape(timezone_label)}</span>
+        <span> · App Version: <span id="dashboard-app-version">{html.escape(app_version)}</span></span>
+      </div>
     </section>
   </div>
   <script>
@@ -904,7 +927,14 @@ def render_dashboard(
     }}
 
     function formatRuleDetail(detail) {{
-      return String(detail ?? "").replace(/-?\\d+\\.\\d{3,}/g, (match) => Number(match).toFixed(2));
+      return String(detail ?? "").replace(
+        /(^|[^\\w.])([-+]?(?:\\d+\\.\\d{{3,}}|\\.\\d{{3,}}|\\d+(?:\\.\\d+)?[eE][-+]?\\d+))/g,
+        (_fullMatch, prefix, numericPart) => {{
+          const parsed = Number(numericPart);
+          if (!Number.isFinite(parsed)) return `${{prefix}}${{numericPart}}`;
+          return `${{prefix}}${{parsed.toFixed(2)}}`;
+        }}
+      );
     }}
 
     function renderRules(strategyRules) {{
@@ -964,11 +994,13 @@ def render_dashboard(
       const decisionReason = document.getElementById("decision-reason");
       if (decisionReason) decisionReason.innerHTML = `<strong>Decision Reason:</strong> ${{escapeHtml(decision?.reason || "No strategy decision persisted yet")}}`;
 
-      const footer = document.getElementById("dashboard-footer");
-      if (footer) {{
+      const footerMeta = document.getElementById("dashboard-refresh-meta");
+      if (footerMeta) {{
         const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "local time";
-        footer.textContent = `Refreshed at ${{formatLocalDateTime(payload.generated_at)}} · Timezone: ${{timezone}}`;
+        footerMeta.textContent = `Refreshed at ${{formatLocalDateTime(payload.generated_at)}} · Timezone: ${{timezone}}`;
       }}
+
+      setText("dashboard-app-version", payload.app_version || "unknown");
 
       renderRules(payload.strategy_rules);
     }}
@@ -1228,6 +1260,7 @@ def _status_to_dict(
 
     return {
         "asset": status.asset,
+        "app_version": _app_version(),
         "mode": mode,
         "generated_at": status.generated_at.isoformat(),
         "latest_market_snapshot": normalize(status.latest_market_snapshot),

@@ -140,7 +140,16 @@ class BotConfig(BaseModel):
 
     @classmethod
     def load(cls, path: str | Path) -> "BotConfig":
-        raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+        config_path = Path(path).resolve()
+        raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        if isinstance(raw, dict):
+            database = raw.get("database")
+            if isinstance(database, dict):
+                db_path = database.get("path")
+                if isinstance(db_path, str) and db_path != ":memory:":
+                    candidate = Path(db_path)
+                    if not candidate.is_absolute():
+                        database["path"] = str((config_path.parent / candidate).resolve())
         return cls.model_validate(raw)
 
     def to_json(self) -> str:
