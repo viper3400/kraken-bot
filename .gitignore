@@ -219,7 +219,10 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
+# MacOs
+.DS_Store
 
 # Project specific
 config.yaml
 data/
+history/
