@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from functools import cache
 import html
 import json
@@ -89,8 +89,12 @@ def _render_table(headers: list[str], rows: list[list[str]], table_class: str = 
 
 def _format_rule_detail(detail: str) -> str:
     def replace_decimal(match: re.Match[str]) -> str:
-        value = Decimal(match.group(0))
-        return format(value.quantize(Decimal("0.01")), "f")
+        raw_value = match.group(0)
+        try:
+            value = Decimal(raw_value)
+            return format(value.quantize(Decimal("0.01")), "f")
+        except InvalidOperation:
+            return raw_value
 
     return _RULE_DETAIL_NUMBER_PATTERN.sub(replace_decimal, detail)
 
