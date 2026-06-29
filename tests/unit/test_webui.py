@@ -317,6 +317,14 @@ def test_format_rule_detail_trims_embedded_precision_variants() -> None:
     assert formatted == "price 0.12 / drift -0.00 / ema50 70.80 / tiny 0.00"
 
 
+def test_format_rule_detail_preserves_unquantizable_scientific_notation() -> None:
+    detail = "extreme move 1e999999 with fallback"
+
+    formatted = _format_rule_detail(detail)
+
+    assert formatted == detail
+
+
 def test_api_status_includes_exchange_open_orders(tmp_path: Path) -> None:
     repositories = build_repositories(tmp_path)
     container = DummyContainer(repositories)
