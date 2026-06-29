@@ -368,9 +368,16 @@ def render_dashboard(
     latest_decision = status.latest_strategy_decision
     open_trade = status.open_trade
     metrics = status.report_metrics
+    cooldown_status = status.cooldown_status
     runtime = runtime or {}
     strategy_snapshot = _strategy_snapshot(status)
     rules_title = "SELL Rules" if strategy_snapshot["context"] == "sell" else "BUY Rules"
+
+    cooldown_label = "Disabled"
+    cooldown_left = "-"
+    if cooldown_status.configured_minutes > 0:
+        cooldown_label = "Active" if cooldown_status.active else "Ready"
+        cooldown_left = f"{cooldown_status.minutes_remaining} min" if cooldown_status.active else "0 min"
 
     market_cards = [
         _render_metric("Mode", mode, "metric-mode"),
@@ -386,6 +393,9 @@ def render_dashboard(
         _render_metric("Band High", StatusService.format_decimal(latest_snapshot.band_upper if latest_snapshot else None), "metric-band-high"),
         _render_metric("Band Width %", StatusService.format_decimal(latest_snapshot.band_width_pct if latest_snapshot else None, places=2), "metric-band-width"),
         _render_metric("Decision", latest_decision.decision.value if latest_decision else "-", "metric-decision"),
+        _render_metric("Cooldown", cooldown_label, "metric-cooldown"),
+        _render_metric("Cooldown Left", cooldown_left, "metric-cooldown-left"),
+        _render_metric("Last Sell", _format_local_datetime(cooldown_status.last_sell_time), "metric-last-sell"),
     ]
     runtime_cards = [
         _render_metric("Cycles", str(runtime.get("cycle_count", 0)), "runtime-cycles"),
@@ -964,6 +974,7 @@ def render_dashboard(
     function refreshStatusFields(payload) {{
       const snapshot = payload.latest_market_snapshot || null;
       const decision = payload.latest_strategy_decision || null;
+      const cooldown = payload.cooldown_status || null;
       const runtime = payload.runtime || {{}};
 
       setText("metric-mode", payload.mode || "-");
@@ -979,6 +990,15 @@ def render_dashboard(
       setText("metric-band-high", formatDecimal(snapshot?.band_upper));
       setText("metric-band-width", formatDecimal(snapshot?.band_width_pct, 2));
       setText("metric-decision", decision?.decision || "-");
+      setText(
+        "metric-cooldown",
+        (cooldown?.configured_minutes ?? 0) > 0 ? (cooldown?.active ? "Active" : "Ready") : "Disabled"
+      );
+      setText(
+        "metric-cooldown-left",
+        (cooldown?.configured_minutes ?? 0) > 0 ? `${{cooldown?.minutes_remaining ?? 0}} min` : "-"
+      );
+      setText("metric-last-sell", formatLocalDateTime(cooldown?.last_sell_time));
 
       setText("runtime-cycles", String(runtime.cycle_count ?? 0));
       setText("runtime-polling-interval", String(runtime.polling_interval_seconds ?? "-"));
@@ -1168,7 +1188,7 @@ def render_dashboard(
 
 
 def build_app(container: Container, loop_controller: BotLoopController | None = None):
-    status_service = StatusService(container.repositories, container.reporting_service, container.exchange)
+    status_service = StatusService(container.repositories, container.reporting_service, container.exchange, container.config)
     exchange_cache: dict[str, object] = {
         "expires_at": None,
         "exchange_open_orders": [],
@@ -1278,6 +1298,7 @@ def _status_to_dict(
         "recent_logs": normalize(status.recent_logs),
         "trade_counts": normalize(status.trade_counts),
         "report_metrics": normalize(status.report_metrics),
+        "cooldown_status": normalize(status.cooldown_status),
         "strategy_rules": normalize(_strategy_snapshot(status)),
         "market_chart": normalize(market_chart),
         "runtime": normalize(runtime),

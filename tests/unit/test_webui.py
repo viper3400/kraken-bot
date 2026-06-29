@@ -77,6 +77,11 @@ class DummyContainer:
                     (),
                     {"asset": "XBT/EUR", "mode": "paper", "polling_interval_seconds": 30},
                 )(),
+                "trade": type(
+                    "Trade",
+                    (),
+                    {"cooldown_after_sell_minutes": 20},
+                )(),
                 "trend_strategy": type(
                     "TrendStrategy",
                     (),
@@ -89,6 +94,7 @@ class DummyContainer:
 def build_repositories(tmp_path: Path) -> SqliteRepositories:
     repositories = SqliteRepositories(SqlitePersistence(tmp_path / "bot.sqlite"))
     now = datetime(2026, 6, 27, 12, 0, tzinfo=timezone.utc)
+    recent_sell_time = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(minutes=5)
     repositories.insert_market_snapshot(
         MarketSnapshot(
             id="snap-1",
@@ -143,6 +149,8 @@ def build_repositories(tmp_path: Path) -> SqliteRepositories:
             id="trade-1",
             asset="XBT/EUR",
             quantity=Decimal("1"),
+            buy_time=recent_sell_time - timedelta(minutes=10),
+            sell_time=recent_sell_time,
             buy_price=Decimal("100.00"),
             sell_price=Decimal("100.80"),
             buy_fee=Decimal("0.16"),
@@ -200,11 +208,14 @@ def test_render_dashboard_contains_status_content(tmp_path: Path) -> None:
     assert "price-grid" in body
     assert "id=\"metric-snapshot-time\"" in body or "id='metric-snapshot-time'" in body
     assert "id=\"metric-price\"" in body or "id='metric-price'" in body
+    assert "id=\"metric-cooldown\"" in body or "id='metric-cooldown'" in body
     assert "id=\"rules-table-body\"" in body or "id='rules-table-body'" in body
     assert "refreshStatusFields(payload)" in body
     assert "price 71.73 / ema20 70.78 / ema50 70.80" in body
     assert "1.35% in [0.5, 1.5]" in body
     assert "70.77571074593162710453145120" not in body
+    assert "Cooldown" in body
+    assert "Active" in body
 
 
 def test_api_status_returns_json(tmp_path: Path) -> None:
@@ -224,6 +235,10 @@ def test_api_status_returns_json(tmp_path: Path) -> None:
     assert payload["app_version"] == app_version()
     assert payload["latest_strategy_decision"]["decision"] == "BUY"
     assert payload["report_metrics"]["net_profit"] == "0.48"
+    assert payload["cooldown_status"]["configured_minutes"] == 20
+    assert payload["cooldown_status"]["active"] is True
+    assert 1 <= payload["cooldown_status"]["minutes_remaining"] <= 20
+    assert payload["cooldown_status"]["last_sell_time"] is not None
     assert payload["runtime"]["polling_interval_seconds"] == 30
     assert payload["market_chart"]["timeframe"] == "15m"
     assert len(payload["market_chart"]["points"]) == 48
@@ -234,7 +249,7 @@ def test_api_status_returns_json(tmp_path: Path) -> None:
 def test_render_dashboard_function_produces_html(tmp_path: Path) -> None:
     repositories = build_repositories(tmp_path)
     container = DummyContainer(repositories)
-    status = StatusService(repositories, container.reporting_service, container.exchange).get_status("XBT/EUR")
+    status = StatusService(repositories, container.reporting_service, container.exchange, container.config).get_status("XBT/EUR")
     dashboard = render_dashboard(status, "paper", {"running": True, "cycle_count": 3})
     assert "<html" in dashboard
     assert "Recent Trades" in dashboard
@@ -243,13 +258,15 @@ def test_render_dashboard_function_produces_html(tmp_path: Path) -> None:
     assert "kraken-open-1" in dashboard
     assert "Live Market Chart" in dashboard
     assert "price-label" in dashboard
+    assert "Cooldown Left" in dashboard
+    assert "Active" in dashboard
     assert f"App Version: <span id=\"dashboard-app-version\">{app_version()}</span>" in dashboard
 
 
 def test_render_dashboard_formats_runtime_timestamps_in_local_time(tmp_path: Path) -> None:
     repositories = build_repositories(tmp_path)
     container = DummyContainer(repositories)
-    status = StatusService(repositories, container.reporting_service, container.exchange).get_status("XBT/EUR")
+    status = StatusService(repositories, container.reporting_service, container.exchange, container.config).get_status("XBT/EUR")
     local_tzinfo = datetime.now().astimezone().tzinfo
     expected_timezone_label = getattr(local_tzinfo, "key", None) or local_tzinfo.tzname(None) or str(local_tzinfo)
     expected_snapshot_time = datetime(2026, 6, 27, 12, 0, tzinfo=timezone.utc).astimezone().strftime(
@@ -294,7 +311,7 @@ def test_render_dashboard_formats_runtime_timestamps_in_local_time(tmp_path: Pat
 def test_render_dashboard_trims_market_indicator_precision(tmp_path: Path) -> None:
     repositories = build_repositories(tmp_path)
     container = DummyContainer(repositories)
-    status = StatusService(repositories, container.reporting_service, container.exchange).get_status("XBT/EUR")
+    status = StatusService(repositories, container.reporting_service, container.exchange, container.config).get_status("XBT/EUR")
 
     dashboard = render_dashboard(status, "paper", {"running": True, "cycle_count": 3})
 
@@ -328,7 +345,7 @@ def test_format_rule_detail_preserves_unquantizable_scientific_notation() -> Non
 def test_api_status_includes_exchange_open_orders(tmp_path: Path) -> None:
     repositories = build_repositories(tmp_path)
     container = DummyContainer(repositories)
-    status = StatusService(repositories, container.reporting_service, container.exchange).get_status("XBT/EUR")
+    status = StatusService(repositories, container.reporting_service, container.exchange, container.config).get_status("XBT/EUR")
 
     assert len(status.exchange_open_orders) == 1
     assert status.exchange_open_orders[0].exchange_order_id == "kraken-open-1"
