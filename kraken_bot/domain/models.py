@@ -123,6 +123,7 @@ class PortfolioState:
     has_open_order: bool
     available_quote_balance: Decimal
     open_trade: Trade | None = None
+    last_closed_trade: Trade | None = None
 
 
 @dataclass(frozen=True)

@@ -83,6 +83,7 @@ class TradeSection(BaseModel):
     post_only: bool = True
     buy_fee_pct: float = Field(default=0.25, ge=0)
     sell_fee_pct: float = Field(default=0.25, ge=0)
+    cooldown_after_sell_minutes: int = Field(default=0, ge=0)
 
     @property
     def round_trip_fee_pct(self) -> float:

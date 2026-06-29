@@ -34,7 +34,13 @@ class RangeStrategy(Strategy):
             rules = [{"label": "No open order", "state": "FAIL", "detail": "A new range entry is blocked while another order is open"}]
             return self._decision(market, config, Decision.HOLD, "Open order already exists", rules, market.price)
 
-        should_buy, reason, rules, target_price = self._should_buy(market, entry_history, portfolio, strategy_config)
+        should_buy, reason, rules, target_price = self._should_buy(
+            market,
+            entry_history,
+            portfolio,
+            strategy_config,
+            config.trade.cooldown_after_sell_minutes,
+        )
         return self._decision(
             market,
             config,
@@ -78,12 +84,18 @@ class RangeStrategy(Strategy):
         entry_history: list[Candle],
         portfolio: PortfolioState,
         config: RangeStrategySection,
+        cooldown_after_sell_minutes: int,
     ) -> tuple[bool, str, list[dict[str, str]], Decimal]:
         assert market.band_lower is not None
         assert market.band_upper is not None
         entry_price = market.band_lower * (Decimal("1") + Decimal(str(config.entry_buffer_pct)) / Decimal("100"))
         upper_bound = market.band_lower * (Decimal("1") + Decimal(str(config.entry_buffer_pct)) / Decimal("100"))
         near_support = market.price <= upper_bound
+        cooldown_active, cooldown_detail = self.sell_cooldown_state(
+            market.time,
+            portfolio,
+            cooldown_after_sell_minutes,
+        )
         recovery_ok = True
         if config.require_recovery_candle and len(entry_history) >= 2:
             previous = entry_history[-2]
@@ -91,11 +103,18 @@ class RangeStrategy(Strategy):
             recovery_ok = current.close > current.open and current.close > previous.close
         rules = [
             {"label": "No open position", "state": "PASS" if not portfolio.has_open_position else "FAIL", "detail": "Single-position rule per asset"},
+            {"label": "Sell cooldown inactive", "state": "FAIL" if cooldown_active else "PASS", "detail": cooldown_detail},
             {"label": "Near lower band", "state": "PASS" if near_support else "FAIL", "detail": f"price {market.price} vs entry zone <= {upper_bound}"},
             {"label": "Sideways regime active", "state": "PASS" if market.regime is MarketRegime.SIDEWAYS else "FAIL", "detail": market.regime.value},
             {"label": "Recovery candle", "state": "PASS" if recovery_ok else "FAIL", "detail": "Support bounce confirmation"},
         ]
-        return near_support and recovery_ok and not portfolio.has_open_position, "Price is not close enough to support", rules, entry_price
+        reason = "Sell cooldown active" if cooldown_active else "Price is not close enough to support"
+        return (
+            near_support and recovery_ok and not portfolio.has_open_position and not cooldown_active,
+            reason,
+            rules,
+            entry_price,
+        )
 
     def _decide_sell(
         self,

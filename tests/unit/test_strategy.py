@@ -27,7 +27,13 @@ def build_config() -> BotConfig:
                 "reduce_target_after_minutes": 60,
                 "reduced_take_profit_pct": 0.3,
             },
-            "trade": {"base_order_quantity": "50.00", "post_only": True, "buy_fee_pct": 0.25, "sell_fee_pct": 0.25},
+            "trade": {
+                "base_order_quantity": "50.00",
+                "post_only": True,
+                "buy_fee_pct": 0.25,
+                "sell_fee_pct": 0.25,
+                "cooldown_after_sell_minutes": 20,
+            },
             "kraken": {"api_key_env": "KRAKEN_API_KEY", "api_secret_env": "KRAKEN_API_SECRET"},
             "database": {"path": ":memory:"},
             "logging": {"level": "INFO"},
@@ -312,3 +318,36 @@ def test_buy_when_confirmation_rebounds_above_pullback_range_but_prior_candle_pu
 
     assert decision.decision is Decision.BUY
     assert decision.pullback == Decimal("1.00")
+
+
+def test_hold_when_sell_cooldown_is_active() -> None:
+    strategy = EmaPullbackStrategy()
+    market = MarketSnapshot(
+        id="1",
+        time=datetime(2026, 6, 27, 10, 15, tzinfo=timezone.utc),
+        asset="XBT/EUR",
+        price=Decimal("100.8"),
+        ema20=Decimal("100.0"),
+        ema50=Decimal("99.0"),
+        volatility=Decimal("0.5"),
+        volume=Decimal("11"),
+        trend_status="BULLISH",
+    )
+    closed_trade = Trade(
+        id="trade-closed-1",
+        asset="XBT/EUR",
+        quantity=Decimal("1"),
+        buy_price=Decimal("100"),
+        sell_price=Decimal("100.8"),
+        buy_time=datetime(2026, 6, 27, 9, 30, tzinfo=timezone.utc),
+        sell_time=datetime(2026, 6, 27, 10, 5, tzinfo=timezone.utc),
+        status=TradeStatus.CLOSED,
+        created_at=datetime(2026, 6, 27, 9, 30, tzinfo=timezone.utc),
+    )
+    portfolio = PortfolioState("XBT/EUR", False, False, Decimal("1000"), last_closed_trade=closed_trade)
+
+    decision = strategy.decide(market, build_history(), portfolio, build_config())
+
+    assert decision.decision is Decision.HOLD
+    assert "Sell cooldown inactive" in (decision.rule_states_json or "")
+    assert "10 min since sell vs cooldown 20" in (decision.rule_states_json or "")

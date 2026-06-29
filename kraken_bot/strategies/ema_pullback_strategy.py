@@ -41,12 +41,23 @@ class EmaPullbackStrategy(Strategy):
                 {"label": "Open order exists", "state": "FAIL", "detail": "A new buy is blocked while another order is open"}
             ]
         else:
-            should_buy, rules = self._should_buy(market, entry_history, portfolio, strategy_config, pullback)
+            should_buy, rules = self._should_buy(
+                market,
+                entry_history,
+                portfolio,
+                strategy_config,
+                config.trade.cooldown_after_sell_minutes,
+                pullback,
+            )
             if should_buy:
                 decision = Decision.BUY
                 reason = f"EMA trend bullish, pullback recovered, no open position ({timeframe_summary})"
             else:
-                reason = f"No buy rule matched ({timeframe_summary})"
+                cooldown_rule = next((rule for rule in rules if rule["label"] == "Sell cooldown inactive"), None)
+                if cooldown_rule and cooldown_rule["state"] == "FAIL":
+                    reason = f"Sell cooldown active ({timeframe_summary})"
+                else:
+                    reason = f"No buy rule matched ({timeframe_summary})"
 
         target_price = market.price
         if decision is Decision.BUY:
@@ -90,8 +101,14 @@ class EmaPullbackStrategy(Strategy):
         entry_history: list[Candle],
         portfolio: PortfolioState,
         config: TrendStrategySection,
+        cooldown_after_sell_minutes: int,
         pullback: Decimal,
     ) -> tuple[bool, list[dict[str, str]]]:
+        cooldown_active, cooldown_detail = self.sell_cooldown_state(
+            market.time,
+            portfolio,
+            cooldown_after_sell_minutes,
+        )
         rules: list[dict[str, str]] = []
         if portfolio.has_open_position:
             return False, [{"label": "No open position", "state": "FAIL", "detail": "The asset already has an open trade"}]
@@ -110,6 +127,11 @@ class EmaPullbackStrategy(Strategy):
         rules.extend(
             [
                 {"label": "No open position", "state": "PASS", "detail": "Single-position rule is satisfied"},
+                {
+                    "label": "Sell cooldown inactive",
+                    "state": "FAIL" if cooldown_active else "PASS",
+                    "detail": cooldown_detail,
+                },
                 {
                     "label": "EMA trend bullish",
                     "state": "PASS" if trend_ok else "FAIL",
@@ -136,7 +158,7 @@ class EmaPullbackStrategy(Strategy):
                 },
             ]
         )
-        return trend_ok and pullback_ok and entry_history_ok and recovery_ok, rules
+        return (not cooldown_active) and trend_ok and pullback_ok and entry_history_ok and recovery_ok, rules
 
     def _decide_sell(
         self,

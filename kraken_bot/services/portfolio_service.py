@@ -32,6 +32,7 @@ class DefaultPortfolioService(PortfolioService):
 
     def get_state(self, asset: str) -> PortfolioState:
         open_trade = self.repositories.get_open_trade(asset)
+        last_closed_trade = self.repositories.get_latest_closed_trade(asset)
         has_open_order = self.repositories.has_open_order(asset)
         return PortfolioState(
             asset=asset,
@@ -39,6 +40,7 @@ class DefaultPortfolioService(PortfolioService):
             has_open_order=has_open_order,
             available_quote_balance=self.available_quote_balance,
             open_trade=open_trade,
+            last_closed_trade=last_closed_trade,
         )
 
     def has_open_position(self, asset: str) -> bool:

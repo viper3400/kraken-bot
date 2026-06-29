@@ -360,6 +360,14 @@ Expected buy-side fee in percent.
 
 Expected sell-side fee in percent.
 
+### `cooldown_after_sell_minutes`
+
+Blocks new buys for this many minutes after the most recent completed sell on the same asset.
+
+- `0`: disabled
+- larger value: fewer immediate re-entries after exits
+- smaller value: faster re-entry after profit-taking or stop-outs
+
 The bot uses both together as a round-trip fee floor:
 
 `round_trip_fee_pct = buy_fee_pct + sell_fee_pct`
@@ -375,6 +383,7 @@ With:
 
 - `buy_fee_pct: 0.25`
 - `sell_fee_pct: 0.25`
+- `cooldown_after_sell_minutes: 20`
 
 the bot treats `0.50%` as the minimum gross profit needed before a profit-taking exit makes sense.
 

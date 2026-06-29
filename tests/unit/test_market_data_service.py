@@ -52,7 +52,7 @@ def build_config() -> BotConfig:
                 "reduce_target_after_minutes": 60,
                 "reduced_take_profit_pct": 0.3,
             },
-            "trade": {"base_order_quantity": "50.00", "post_only": True},
+            "trade": {"base_order_quantity": "50.00", "post_only": True, "cooldown_after_sell_minutes": 20},
             "kraken": {"api_key_env": "KRAKEN_API_KEY", "api_secret_env": "KRAKEN_API_SECRET"},
             "database": {"path": ":memory:"},
             "logging": {"level": "INFO"},

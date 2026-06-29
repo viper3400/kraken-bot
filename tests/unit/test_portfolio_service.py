@@ -62,3 +62,25 @@ def test_can_open_trade_with_capital_and_no_open_state(tmp_path: Path) -> None:
     repositories = build_repositories(tmp_path)
     service = DefaultPortfolioService(repositories, available_quote_balance=Decimal("100"))
     assert service.can_open_trade("XBT/EUR", Decimal("50")) is True
+
+
+def test_get_state_includes_latest_closed_trade(tmp_path: Path) -> None:
+    repositories = build_repositories(tmp_path)
+    now = datetime.now(timezone.utc)
+    repositories.insert_trade(
+        Trade(
+            id="trade-closed-1",
+            asset="XBT/EUR",
+            quantity=Decimal("0.5"),
+            buy_time=now,
+            sell_time=now,
+            status=TradeStatus.CLOSED,
+            created_at=now,
+        )
+    )
+
+    service = DefaultPortfolioService(repositories)
+    state = service.get_state("XBT/EUR")
+
+    assert state.last_closed_trade is not None
+    assert state.last_closed_trade.id == "trade-closed-1"
