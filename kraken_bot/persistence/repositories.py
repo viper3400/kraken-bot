@@ -200,6 +200,22 @@ class SqliteRepositories:
             ).fetchone()
         return self._row_to_trade(row) if row else None
 
+    def get_latest_closed_trade(self, asset: str) -> Trade | None:
+        with self.sqlite.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT *
+                FROM trades
+                WHERE asset = ?
+                  AND status = ?
+                  AND sell_time IS NOT NULL
+                ORDER BY sell_time DESC, created_at DESC
+                LIMIT 1
+                """,
+                (asset, TradeStatus.CLOSED.value),
+            ).fetchone()
+        return self._row_to_trade(row) if row else None
+
     def has_open_order(self, asset: str) -> bool:
         with self.sqlite.connect() as connection:
             row = connection.execute(

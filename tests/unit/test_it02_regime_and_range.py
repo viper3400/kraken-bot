@@ -45,7 +45,13 @@ def build_config() -> BotConfig:
                 "max_holding_minutes": 180,
                 "require_recovery_candle": True,
             },
-            "trade": {"base_order_quantity": "50.00", "post_only": True, "buy_fee_pct": 0.25, "sell_fee_pct": 0.25},
+            "trade": {
+                "base_order_quantity": "50.00",
+                "post_only": True,
+                "buy_fee_pct": 0.25,
+                "sell_fee_pct": 0.25,
+                "cooldown_after_sell_minutes": 20,
+            },
             "kraken": {"api_key_env": "KRAKEN_API_KEY", "api_secret_env": "KRAKEN_API_SECRET"},
             "database": {"path": ":memory:"},
             "logging": {"level": "INFO"},
@@ -261,3 +267,47 @@ def test_regime_strategy_routes_to_range_in_sideways_market() -> None:
         build_config(),
     )
     assert decision.strategy_name == "range"
+
+
+def test_range_strategy_holds_during_sell_cooldown() -> None:
+    strategy = RangeStrategy()
+    market = MarketSnapshot(
+        id="1",
+        time=datetime(2026, 6, 27, 12, 15, tzinfo=timezone.utc),
+        asset="SOL/USD",
+        price=Decimal("148.35"),
+        ema20=Decimal("149.1"),
+        ema50=Decimal("149.0"),
+        volatility=Decimal("0.5"),
+        volume=Decimal("42"),
+        trend_status="FLAT",
+        regime=MarketRegime.SIDEWAYS,
+        band_lower=Decimal("148.00"),
+        band_upper=Decimal("150.00"),
+        band_width_pct=Decimal("1.35"),
+        regime_reason="Recent range is tight and EMA slopes are flat",
+    )
+    closed_trade = Trade(
+        id="trade-closed-1",
+        asset="SOL/USD",
+        quantity=Decimal("1"),
+        buy_price=Decimal("148.10"),
+        sell_price=Decimal("149.60"),
+        buy_time=datetime(2026, 6, 27, 11, 30, tzinfo=timezone.utc),
+        sell_time=datetime(2026, 6, 27, 12, 5, tzinfo=timezone.utc),
+        status=TradeStatus.CLOSED,
+        strategy_name="range",
+        regime=MarketRegime.SIDEWAYS,
+        created_at=datetime(2026, 6, 27, 11, 30, tzinfo=timezone.utc),
+    )
+
+    decision = strategy.decide(
+        market,
+        build_sideways_candles(),
+        PortfolioState("SOL/USD", False, False, Decimal("1000"), last_closed_trade=closed_trade),
+        build_config(),
+    )
+
+    assert decision.decision is Decision.HOLD
+    assert "Sell cooldown inactive" in (decision.rule_states_json or "")
+    assert "10 min since sell vs cooldown 20" in (decision.rule_states_json or "")
