@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from kraken_bot.app.config import BotConfig
+from kraken_bot.app.demo_seed import DemoDataSeeder
 from kraken_bot.exchange.kraken_adapter import KrakenAdapter
 from kraken_bot.persistence.repositories import SqliteRepositories
 from kraken_bot.persistence.sqlite import SqlitePersistence
@@ -25,6 +26,7 @@ class Container:
         self.config = config
         self.sqlite = SqlitePersistence(Path(config.database.path))
         self.repositories = SqliteRepositories(self.sqlite)
+        DemoDataSeeder(self.repositories, config).seed_if_enabled()
         self.exchange = KrakenAdapter(
             base_url=config.kraken.base_url,
             api_key_env=config.kraken.api_key_env,

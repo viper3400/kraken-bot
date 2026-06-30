@@ -99,3 +99,23 @@ database:
 
     assert config.database.path == str((config_dir / "data" / "bot.sqlite").resolve())
     assert config.trade.cooldown_after_sell_minutes == 20
+
+
+def test_demo_mode_allows_missing_kraken_credentials() -> None:
+    valid = build_valid_config()
+    valid["bot"]["mode"] = "demo"
+    valid["kraken"] = {}
+
+    config = BotConfig.model_validate(valid)
+
+    assert config.bot.mode == "demo"
+
+
+def test_non_demo_mode_requires_kraken_credentials() -> None:
+    valid = build_valid_config()
+    valid["kraken"] = {}
+
+    with pytest.raises(ValidationError) as exc_info:
+        BotConfig.model_validate(valid)
+
+    assert "configure Kraken credentials" in str(exc_info.value)

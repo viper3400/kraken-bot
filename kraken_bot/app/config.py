@@ -14,7 +14,7 @@ SUPPORTED_TIMEFRAMES = frozenset({"1m", "5m", "15m", "1h"})
 class BotSection(BaseModel):
     asset: str
     polling_interval_seconds: int = Field(gt=0)
-    mode: Literal["live", "paper", "backtest"] = "paper"
+    mode: Literal["live", "paper", "backtest", "demo"] = "paper"
 
 
 class MarketRegimeSection(BaseModel):
@@ -97,18 +97,6 @@ class KrakenSection(BaseModel):
     api_secret_env: str | None = None
     base_url: str = "https://api.kraken.com"
 
-    @model_validator(mode="after")
-    def validate_credentials(self) -> "KrakenSection":
-        direct_pair = bool(self.api_key) == bool(self.api_secret)
-        env_pair = bool(self.api_key_env) == bool(self.api_secret_env)
-        if not direct_pair:
-            raise ValueError("kraken.api_key and kraken.api_secret must be set together")
-        if not env_pair:
-            raise ValueError("kraken.api_key_env and kraken.api_secret_env must be set together")
-        if not (self.api_key and self.api_secret) and not (self.api_key_env and self.api_secret_env):
-            raise ValueError("configure Kraken credentials via api_key/api_secret or api_key_env/api_secret_env")
-        return self
-
 
 class DatabaseSection(BaseModel):
     path: str
@@ -138,6 +126,22 @@ class BotConfig(BaseModel):
             if "trend_strategy" not in data and "strategy" in data:
                 data["trend_strategy"] = data.pop("strategy")
         return data
+
+    @model_validator(mode="after")
+    def validate_kraken_credentials(self) -> "BotConfig":
+        direct_pair = bool(self.kraken.api_key) == bool(self.kraken.api_secret)
+        env_pair = bool(self.kraken.api_key_env) == bool(self.kraken.api_secret_env)
+        if not direct_pair:
+            raise ValueError("kraken.api_key and kraken.api_secret must be set together")
+        if not env_pair:
+            raise ValueError("kraken.api_key_env and kraken.api_secret_env must be set together")
+        if self.bot.mode == "demo":
+            return self
+        if not (self.kraken.api_key and self.kraken.api_secret) and not (
+            self.kraken.api_key_env and self.kraken.api_secret_env
+        ):
+            raise ValueError("configure Kraken credentials via api_key/api_secret or api_key_env/api_secret_env")
+        return self
 
     @classmethod
     def load(cls, path: str | Path) -> "BotConfig":

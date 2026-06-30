@@ -21,6 +21,7 @@ from kraken_bot.services.market_data_service import calculate_ema
 from kraken_bot.services.status_service import BotStatus, StatusService
 
 _RULE_DETAIL_NUMBER_PATTERN = re.compile(r"(?<![\w.])[-+]?(?:\d+\.\d{3,}|\.\d{3,}|\d+(?:\.\d+)?[eE][-+]?\d+)")
+_DASHBOARD_REFRESH_SECONDS = 15
 
 
 @cache
@@ -56,6 +57,36 @@ def _format_local_datetime(value: object) -> str:
     return dt.astimezone().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _format_local_datetime_short(value: object) -> str:
+    formatted = _format_local_datetime(value)
+    return formatted[:-3] if len(formatted) >= 16 else formatted
+
+
+def _format_duration_seconds(value: object) -> str:
+    if value in (None, ""):
+        return "-"
+    try:
+        total_seconds = int(value)
+    except (TypeError, ValueError):
+        return str(value)
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h {minutes:02d}m {seconds:02d}s"
+    if minutes:
+        return f"{minutes}m {seconds:02d}s"
+    return f"{seconds}s"
+
+
+def _format_money_total(price: Decimal | None, quantity: Decimal, fee: Decimal | None = None, *, subtract_fee: bool = False) -> str:
+    if price is None:
+        return "-"
+    total = price * quantity
+    if fee is not None:
+        total = total - fee if subtract_fee else total + fee
+    return StatusService.format_decimal(total)
+
+
 def _local_timezone_label() -> str:
     tzinfo = datetime.now().astimezone().tzinfo
     if tzinfo is None:
@@ -85,6 +116,87 @@ def _render_table(headers: list[str], rows: list[list[str]], table_class: str = 
     body = "".join(body_rows) if body_rows else "<tr><td colspan='99'>No data</td></tr>"
     class_attr = f" class='{html.escape(table_class)}'" if table_class else ""
     return f"<div class='table-wrap'><table{class_attr}><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>"
+
+
+def _render_detail_tags(values: list[str]) -> str:
+    tags = [value for value in values if value and value != "-"]
+    if not tags:
+        return "-"
+    return "".join(f"<span class='detail-tag'>{html.escape(value)}</span>" for value in tags)
+
+
+def _render_recent_trades_table(trades: list) -> str:
+    body_rows: list[str] = []
+    for trade in trades:
+        trade_label = f"{trade.id} · {trade.status.value}"
+        execution = f"Qty {format(trade.quantity, 'f')} · Buy {StatusService.format_decimal(trade.buy_price)} · Sell {StatusService.format_decimal(trade.sell_price)}"
+        outcome = f"Net {StatusService.format_decimal(trade.net_profit)}"
+        timing = _format_local_datetime(trade.created_at)
+        detail = _render_detail_tags([
+            f"Buy Total {_format_money_total(trade.buy_price, trade.quantity, trade.buy_fee)}",
+            f"Sell Total {_format_money_total(trade.sell_price, trade.quantity, trade.sell_fee, subtract_fee=True)}",
+            f"Fees {StatusService.format_decimal(trade.total_fees if trade.total_fees is not None else trade.buy_fee + trade.sell_fee)}",
+            f"Held {_format_duration_seconds(trade.holding_duration_seconds)}",
+            f"Regime {trade.regime.value if trade.regime else '-'}",
+            f"Strategy {trade.strategy_name or '-'}",
+            f"Buy Order {trade.buy_order_id or '-'}",
+            f"Sell Order {trade.sell_order_id or '-'}",
+        ])
+        body_rows.append(
+            "<tr class='entry-row entry-summary'>"
+            f"<td>{html.escape(trade_label)}</td>"
+            f"<td>{html.escape(execution)}</td>"
+            f"<td>{html.escape(outcome)}</td>"
+            f"<td>{html.escape(timing)}</td>"
+            "</tr>"
+            "<tr class='entry-row entry-detail'>"
+            f"<td colspan='4'>{detail}</td>"
+            "</tr>"
+        )
+    body = "".join(body_rows) if body_rows else "<tr><td colspan='4'>No data</td></tr>"
+    return (
+        "<div class='table-wrap'>"
+        "<table class='table-entry table-recent-trades'>"
+        "<thead><tr><th>Trade</th><th>Execution</th><th>Outcome</th><th>Created</th></tr></thead>"
+        f"<tbody>{body}</tbody>"
+        "</table>"
+        "</div>"
+    )
+
+
+def _render_recent_orders_table(orders: list) -> str:
+    body_rows: list[str] = []
+    for order in orders:
+        order_label = f"{order.id} · {order.type.value}"
+        execution = f"Qty {format(order.quantity, 'f')} @ {format(order.price, 'f')}"
+        state = order.status.value
+        timing = _format_local_datetime(order.time)
+        detail = _render_detail_tags([
+            f"Trade {order.trade_id or '-'}",
+            f"Notional {StatusService.format_decimal(order.price * order.quantity)}",
+            f"Exchange {order.exchange_id or '-'}",
+            f"Post Only {'yes' if order.post_only else 'no'}",
+        ])
+        body_rows.append(
+            "<tr class='entry-row entry-summary'>"
+            f"<td>{html.escape(order_label)}</td>"
+            f"<td>{html.escape(execution)}</td>"
+            f"<td>{html.escape(state)}</td>"
+            f"<td>{html.escape(timing)}</td>"
+            "</tr>"
+            "<tr class='entry-row entry-detail'>"
+            f"<td colspan='4'>{detail}</td>"
+            "</tr>"
+        )
+    body = "".join(body_rows) if body_rows else "<tr><td colspan='4'>No data</td></tr>"
+    return (
+        "<div class='table-wrap'>"
+        "<table class='table-entry table-recent-orders'>"
+        "<thead><tr><th>Order</th><th>Execution</th><th>Status</th><th>Time</th></tr></thead>"
+        f"<tbody>{body}</tbody>"
+        "</table>"
+        "</div>"
+    )
 
 
 def _format_rule_detail(detail: str) -> str:
@@ -315,9 +427,9 @@ def _render_market_chart(chart_payload: dict[str, object] | None) -> str:
         f"{html.escape(StatusService.format_decimal(tick_value, places=2))}</text>"
         for tick_value, tick_y in price_ticks
     )
-    first_label = _format_local_datetime(points[0]["time"])
-    mid_label = _format_local_datetime(points[len(points) // 2]["time"])
-    last_label = _format_local_datetime(points[-1]["time"])
+    first_label = _format_local_datetime_short(points[0]["time"])
+    mid_label = _format_local_datetime_short(points[len(points) // 2]["time"])
+    last_label = _format_local_datetime_short(points[-1]["time"])
     meta = [
         f"<span class='mini-tag'>Trend TF: {html.escape(str(chart_payload.get('timeframe', '-')))}</span>",
         f"<span class='mini-tag'>Candles: {len(points)}</span>",
@@ -405,14 +517,14 @@ def render_dashboard(
         _render_metric("Last Error", str(runtime.get("last_error") or "-"), "runtime-last-error"),
     ]
     pnl_cards = [
-        _render_metric("Net PnL", format(metrics.net_profit, "f")),
-        _render_metric("Gross PnL", format(metrics.gross_profit, "f")),
-        _render_metric("Fees", format(metrics.fees, "f")),
-        _render_metric("Win Rate %", format(metrics.win_rate, "f")),
-        _render_metric("Trades", str(metrics.total_trades)),
-        _render_metric("Open Trades", str(metrics.open_trades)),
-        _render_metric("Closed Trades", str(metrics.closed_trades)),
-        _render_metric("Avg Hold", str(metrics.average_holding_duration)),
+        _render_metric("Net PnL", format(metrics.net_profit, "f"), "metric-net-pnl"),
+        _render_metric("Gross PnL", format(metrics.gross_profit, "f"), "metric-gross-pnl"),
+        _render_metric("Fees", format(metrics.fees, "f"), "metric-fees"),
+        _render_metric("Win Rate %", format(metrics.win_rate, "f"), "metric-win-rate"),
+        _render_metric("Trades", str(metrics.total_trades), "metric-total-trades"),
+        _render_metric("Open Trades", str(metrics.open_trades), "metric-open-trades"),
+        _render_metric("Closed Trades", str(metrics.closed_trades), "metric-closed-trades"),
+        _render_metric("Avg Hold", str(metrics.average_holding_duration), "metric-average-hold"),
     ]
     open_trade_markup = (
         _render_table(
@@ -429,45 +541,13 @@ def render_dashboard(
         else "<div class='empty'>No open trade</div>"
     )
 
-    recent_trades = _render_table(
-        ["Trade ID", "Asset", "Qty", "Buy", "Sell", "Net", "Status", "Created"],
-        [
-            [
-                trade.id,
-                trade.asset,
-                format(trade.quantity, "f"),
-                StatusService.format_decimal(trade.buy_price),
-                StatusService.format_decimal(trade.sell_price),
-                StatusService.format_decimal(trade.net_profit),
-                trade.status.value,
-                _format_local_datetime(trade.created_at),
-            ]
-            for trade in status.recent_trades
-        ],
-    )
-    recent_orders = _render_table(
-        ["Order ID", "Trade ID", "Type", "Price", "Qty", "Status", "Exchange ID", "Time"],
-        [
-            [
-                order.id,
-                order.trade_id or "-",
-                order.type.value,
-                format(order.price, "f"),
-                format(order.quantity, "f"),
-                order.status.value,
-                order.exchange_id or "-",
-                _format_local_datetime(order.time),
-            ]
-            for order in status.recent_orders
-        ],
-        table_class="table-compact table-recent-orders",
-    )
+    recent_trades = _render_recent_trades_table(status.recent_trades)
+    recent_orders = _render_recent_orders_table(status.recent_orders)
     exchange_open_orders = _render_table(
-        ["Exchange ID", "Asset", "Type", "Price", "Qty", "Filled", "Status", "Opened"],
+        ["Exchange ID", "Type", "Price", "Qty", "Filled", "Status", "Opened"],
         [
             [
                 order.exchange_order_id,
-                order.asset,
                 order.type.value,
                 format(order.price, "f"),
                 format(order.quantity, "f"),
@@ -608,34 +688,30 @@ def render_dashboard(
       font-weight: 600;
       white-space: nowrap;
     }}
-    .table-compact {{
+    .table-entry {{
       table-layout: fixed;
     }}
-    .table-compact th, .table-compact td {{
+    .table-entry th, .table-entry td {{
       padding: 8px 6px;
       font-size: 0.8rem;
     }}
-    .table-recent-orders th:nth-child(1), .table-recent-orders td:nth-child(1) {{
-      width: 16%;
+    .entry-summary td {{
+      border-bottom: 0;
+      font-weight: 600;
     }}
-    .table-recent-orders th:nth-child(2), .table-recent-orders td:nth-child(2) {{
-      width: 16%;
+    .entry-detail td {{
+      padding-top: 0;
+      border-bottom: 1px solid var(--border);
     }}
-    .table-recent-orders th:nth-child(3), .table-recent-orders td:nth-child(3) {{
-      width: 8%;
-    }}
-    .table-recent-orders th:nth-child(4), .table-recent-orders td:nth-child(4),
-    .table-recent-orders th:nth-child(5), .table-recent-orders td:nth-child(5) {{
-      width: 9%;
-    }}
-    .table-recent-orders th:nth-child(6), .table-recent-orders td:nth-child(6) {{
-      width: 10%;
-    }}
-    .table-recent-orders th:nth-child(7), .table-recent-orders td:nth-child(7) {{
-      width: 16%;
-    }}
-    .table-recent-orders th:nth-child(8), .table-recent-orders td:nth-child(8) {{
-      width: 16%;
+    .detail-tag {{
+      display: inline-block;
+      margin: 0 8px 8px 0;
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: #efe7d7;
+      color: #5d5549;
+      font-size: 0.75rem;
+      font-family: var(--mono);
     }}
     .tag {{
       display: inline-block;
@@ -847,7 +923,7 @@ def render_dashboard(
       <div class="reason" id="decision-reason"><strong>Decision Reason:</strong> {html.escape(decision_reason)}</div>
     </section>
     <section class="section">
-      <h2>{html.escape(rules_title)}</h2>
+      <h2 id="strategy-rules-title">{html.escape(rules_title)}</h2>
       <p>Rule-by-rule view of the latest strategy evaluation based on persisted snapshot and portfolio state.</p>
       <table>
         <thead>
@@ -868,30 +944,30 @@ def render_dashboard(
     </section>
     <section class="section">
       <h2>Performance</h2>
-      <div class="grid">{''.join(pnl_cards)}</div>
+      <div class="grid" id="performance-grid">{''.join(pnl_cards)}</div>
     </section>
     <section class="section">
       <h2>Open Trade</h2>
-      {open_trade_markup}
+      <div id="open-trade-root">{open_trade_markup}</div>
     </section>
     <section class="section">
       <h2>Recent Orders</h2>
-      {recent_orders}
+      <div id="recent-orders-root">{recent_orders}</div>
     </section>
     <section class="section">
       <h2>Kraken Open Orders</h2>
-      <p>{exchange_open_orders_summary}</p>
-      {exchange_open_orders}
+      <p id="exchange-open-orders-summary">{exchange_open_orders_summary}</p>
+      <div id="exchange-open-orders-root">{exchange_open_orders}</div>
     </section>
     <section class="section">
       <h2>Recent Trades</h2>
-      {recent_trades}
+      <div id="recent-trades-root">{recent_trades}</div>
     </section>
     <section class="section">
       <h2>Recent Logs</h2>
-      {recent_logs}
+      <div id="recent-logs-root">{recent_logs}</div>
       <div class="footer" id="dashboard-footer">
-        <span id="dashboard-refresh-meta">Refreshed at {html.escape(status.generated_at.isoformat())} · Timezone: {html.escape(timezone_label)}</span>
+        <span id="dashboard-refresh-meta">Refreshed at {html.escape(_format_local_datetime(status.generated_at))} · Timezone: {html.escape(timezone_label)}</span>
         <span> · App Version: <span id="dashboard-app-version">{html.escape(app_version)}</span></span>
       </div>
     </section>
@@ -933,11 +1009,40 @@ def render_dashboard(
       return `${{year}}-${{month}}-${{day}} ${{hours}}:${{minutes}}:${{seconds}}`;
     }}
 
+    function formatLocalDateTimeShort(value) {{
+      const formatted = formatLocalDateTime(value);
+      return formatted === "-" ? formatted : formatted.slice(0, 16);
+    }}
+
+    function formatDurationSeconds(value) {{
+      if (value === null || value === undefined || value === "") return "-";
+      const totalSeconds = Number(value);
+      if (!Number.isFinite(totalSeconds)) return String(value);
+      const normalized = Math.max(0, Math.trunc(totalSeconds));
+      const hours = Math.floor(normalized / 3600);
+      const remainder = normalized % 3600;
+      const minutes = Math.floor(remainder / 60);
+      const seconds = remainder % 60;
+      if (hours > 0) return `${{hours}}h ${{String(minutes).padStart(2, "0")}}m ${{String(seconds).padStart(2, "0")}}s`;
+      if (minutes > 0) return `${{minutes}}m ${{String(seconds).padStart(2, "0")}}s`;
+      return `${{seconds}}s`;
+    }}
+
     function formatDecimal(value, places = null) {{
       if (value === null || value === undefined || value === "") return "-";
       const parsed = Number(value);
       if (!Number.isFinite(parsed)) return String(value);
       return places === null ? parsed.toString() : parsed.toFixed(places);
+    }}
+
+    function formatMoneyTotal(price, quantity, fee = null, subtractFee = false) {{
+      const priceValue = numberOrNull(price);
+      const quantityValue = numberOrNull(quantity);
+      if (priceValue === null || quantityValue === null) return "-";
+      let total = priceValue * quantityValue;
+      const feeValue = numberOrNull(fee);
+      if (feeValue !== null) total = subtractFee ? total - feeValue : total + feeValue;
+      return formatDecimal(total);
     }}
 
     function formatRuleDetail(detail) {{
@@ -951,9 +1056,31 @@ def render_dashboard(
       );
     }}
 
+    function renderTable(headers, rows, tableClass = "") {{
+      const head = headers.map((header) => `<th>${{escapeHtml(header)}}</th>`).join("");
+      const bodyRows = rows.map((row) => {{
+        const cells = row.map((cell) => `<td>${{escapeHtml(cell)}}</td>`).join("");
+        return `<tr>${{cells}}</tr>`;
+      }}).join("");
+      const body = bodyRows || "<tr><td colspan='99'>No data</td></tr>";
+      const classAttr = tableClass ? ` class="${{escapeHtml(tableClass)}}"` : "";
+      return `<div class="table-wrap"><table${{classAttr}}><thead><tr>${{head}}</tr></thead><tbody>${{body}}</tbody></table></div>`;
+    }}
+
+    function renderDetailTags(values) {{
+      const tags = values
+        .filter((value) => value !== null && value !== undefined && value !== "" && value !== "-")
+        .map((value) => `<span class="detail-tag">${{escapeHtml(String(value))}}</span>`);
+      return tags.join("") || "-";
+    }}
+
     function renderRules(strategyRules) {{
+      const title = document.getElementById("strategy-rules-title");
       const body = document.getElementById("rules-table-body");
       if (!body || !strategyRules) return;
+      if (title) {{
+        title.textContent = strategyRules.context === "sell" ? "SELL Rules" : "BUY Rules";
+      }}
       const rules = Array.isArray(strategyRules.rules) ? strategyRules.rules : [];
       body.innerHTML = rules.map((rule) => {{
         const [label, state, detail] = Array.isArray(rule) ? rule : ["Rule", "UNKNOWN", ""];
@@ -969,6 +1096,142 @@ def render_dashboard(
           </tr>
         `;
       }}).join("") || '<tr><td colspan="3">No data</td></tr>';
+    }}
+
+    function renderPerformance(reportMetrics) {{
+      setText("metric-net-pnl", formatDecimal(reportMetrics?.net_profit));
+      setText("metric-gross-pnl", formatDecimal(reportMetrics?.gross_profit));
+      setText("metric-fees", formatDecimal(reportMetrics?.fees));
+      setText("metric-win-rate", formatDecimal(reportMetrics?.win_rate));
+      setText("metric-total-trades", String(reportMetrics?.total_trades ?? 0));
+      setText("metric-open-trades", String(reportMetrics?.open_trades ?? 0));
+      setText("metric-closed-trades", String(reportMetrics?.closed_trades ?? 0));
+      setText("metric-average-hold", String(reportMetrics?.average_holding_duration ?? "-"));
+    }}
+
+    function renderOpenTrade(openTrade) {{
+      const root = document.getElementById("open-trade-root");
+      if (!root) return;
+      if (!openTrade) {{
+        root.innerHTML = "<div class='empty'>No open trade</div>";
+        return;
+      }}
+      root.innerHTML = renderTable(
+        ["Trade ID", "Qty", "Buy Price", "Buy Time", "Status"],
+        [[
+          String(openTrade.id || "-"),
+          formatDecimal(openTrade.quantity),
+          formatDecimal(openTrade.buy_price),
+          formatLocalDateTime(openTrade.buy_time),
+          `${{String(openTrade.status || "-")}} / ${{String(openTrade.strategy_name || "-")}}`,
+        ]]
+      );
+    }}
+
+    function renderRecentOrders(orders) {{
+      const root = document.getElementById("recent-orders-root");
+      if (!root) return;
+      const entries = (Array.isArray(orders) ? orders : []).map((order) => {{
+        const detail = renderDetailTags([
+          `Trade ${{String(order.trade_id || "-")}}`,
+          `Notional ${{formatMoneyTotal(order.price, order.quantity)}}`,
+          `Exchange ${{String(order.exchange_id || "-")}}`,
+          `Post Only ${{order.post_only ? "yes" : "no"}}`,
+        ]);
+        return `
+          <tr class="entry-row entry-summary">
+            <td>${{escapeHtml(`${{String(order.id || "-")}} · ${{String(order.type || "-")}}`)}}</td>
+            <td>${{escapeHtml(`Qty ${{formatDecimal(order.quantity)}} @ ${{formatDecimal(order.price)}}`)}}</td>
+            <td>${{escapeHtml(String(order.status || "-"))}}</td>
+            <td>${{escapeHtml(formatLocalDateTime(order.time))}}</td>
+          </tr>
+          <tr class="entry-row entry-detail">
+            <td colspan="4">${{detail}}</td>
+          </tr>
+        `;
+      }}).join("") || "<tr><td colspan='4'>No data</td></tr>";
+      root.innerHTML = `
+        <div class="table-wrap">
+          <table class="table-entry table-recent-orders">
+            <thead><tr><th>Order</th><th>Execution</th><th>Status</th><th>Time</th></tr></thead>
+            <tbody>${{entries}}</tbody>
+          </table>
+        </div>
+      `;
+    }}
+
+    function renderExchangeOpenOrders(asset, orders, error) {{
+      const summary = document.getElementById("exchange-open-orders-summary");
+      if (summary) {{
+        summary.textContent = error ? `Kraken fetch error: ${{error}}` : `Live Kraken open orders for ${{asset || "-"}}.`;
+      }}
+      const root = document.getElementById("exchange-open-orders-root");
+      if (!root) return;
+      const rows = (Array.isArray(orders) ? orders : []).map((order) => [
+        String(order.exchange_order_id || "-"),
+        String(order.type || "-"),
+        formatDecimal(order.price),
+        formatDecimal(order.quantity),
+        formatDecimal(order.filled_quantity),
+        String(order.status || "-"),
+        formatLocalDateTime(order.opened_at),
+      ]);
+      root.innerHTML = renderTable(
+        ["Exchange ID", "Type", "Price", "Qty", "Filled", "Status", "Opened"],
+        rows
+      );
+    }}
+
+    function renderRecentTrades(trades) {{
+      const root = document.getElementById("recent-trades-root");
+      if (!root) return;
+      const entries = (Array.isArray(trades) ? trades : []).map((trade) => {{
+        const detail = renderDetailTags([
+          `Buy Total ${{formatMoneyTotal(trade.buy_price, trade.quantity, trade.buy_fee, false)}}`,
+          `Sell Total ${{formatMoneyTotal(trade.sell_price, trade.quantity, trade.sell_fee, true)}}`,
+          `Fees ${{formatDecimal(trade.total_fees ?? ((numberOrNull(trade.buy_fee) ?? 0) + (numberOrNull(trade.sell_fee) ?? 0)))}}`,
+          `Held ${{formatDurationSeconds(trade.holding_duration_seconds)}}`,
+          `Regime ${{String(trade.regime || "-")}}`,
+          `Strategy ${{String(trade.strategy_name || "-")}}`,
+          `Buy Order ${{String(trade.buy_order_id || "-")}}`,
+          `Sell Order ${{String(trade.sell_order_id || "-")}}`,
+        ]);
+        return `
+          <tr class="entry-row entry-summary">
+            <td>${{escapeHtml(`${{String(trade.id || "-")}} · ${{String(trade.status || "-")}}`)}}</td>
+            <td>${{escapeHtml(`Qty ${{formatDecimal(trade.quantity)}} · Buy ${{formatDecimal(trade.buy_price)}} · Sell ${{formatDecimal(trade.sell_price)}}`)}}</td>
+            <td>${{escapeHtml(`Net ${{formatDecimal(trade.net_profit)}}`)}}</td>
+            <td>${{escapeHtml(formatLocalDateTime(trade.created_at))}}</td>
+          </tr>
+          <tr class="entry-row entry-detail">
+            <td colspan="4">${{detail}}</td>
+          </tr>
+        `;
+      }}).join("") || "<tr><td colspan='4'>No data</td></tr>";
+      root.innerHTML = `
+        <div class="table-wrap">
+          <table class="table-entry table-recent-trades">
+            <thead><tr><th>Trade</th><th>Execution</th><th>Outcome</th><th>Created</th></tr></thead>
+            <tbody>${{entries}}</tbody>
+          </table>
+        </div>
+      `;
+    }}
+
+    function renderRecentLogs(logs) {{
+      const root = document.getElementById("recent-logs-root");
+      if (!root) return;
+      const rows = (Array.isArray(logs) ? logs : []).map((log) => [
+        formatLocalDateTime(log.time),
+        String(log.level || "-"),
+        String(log.service || "-"),
+        String(log.message || "-"),
+        String(log.context_json || "-"),
+      ]);
+      root.innerHTML = renderTable(
+        ["Time", "Level", "Service", "Message", "Context"],
+        rows
+      );
     }}
 
     function refreshStatusFields(payload) {{
@@ -1026,6 +1289,12 @@ def render_dashboard(
 
       setText("dashboard-app-version", payload.app_version || "unknown");
 
+      renderPerformance(payload.report_metrics || null);
+      renderOpenTrade(payload.open_trade || null);
+      renderRecentOrders(payload.recent_orders || []);
+      renderExchangeOpenOrders(payload.asset || "-", payload.exchange_open_orders || [], payload.exchange_open_orders_error || null);
+      renderRecentTrades(payload.recent_trades || []);
+      renderRecentLogs(payload.recent_logs || []);
       renderRules(payload.strategy_rules);
     }}
 
@@ -1127,9 +1396,9 @@ def render_dashboard(
         `<text class="price-label" x="${{(width - right - 4).toFixed(2)}}" y="${{(tick.y - 4).toFixed(2)}}" text-anchor="end">${{escapeHtml(tick.value.toFixed(2))}}</text>`
       ).join("");
 
-      const firstLabel = escapeHtml(normalized[0].time.replace("T", " ").slice(0, 16));
-      const midLabel = escapeHtml(normalized[Math.floor(normalized.length / 2)].time.replace("T", " ").slice(0, 16));
-      const lastLabel = escapeHtml(normalized[normalized.length - 1].time.replace("T", " ").slice(0, 16));
+      const firstLabel = escapeHtml(formatLocalDateTimeShort(normalized[0].time));
+      const midLabel = escapeHtml(formatLocalDateTimeShort(normalized[Math.floor(normalized.length / 2)].time));
+      const lastLabel = escapeHtml(formatLocalDateTimeShort(normalized[normalized.length - 1].time));
       const meta = [
         `<span class="mini-tag">Trend TF: ${{escapeHtml(chart.timeframe || "-")}}</span>`,
         `<span class="mini-tag">Candles: ${{normalized.length}}</span>`,
@@ -1181,7 +1450,7 @@ def render_dashboard(
     }}
 
     refreshDashboardVisuals();
-    window.setInterval(refreshDashboardVisuals, 5000);
+    window.setInterval(refreshDashboardVisuals, {_DASHBOARD_REFRESH_SECONDS * 1000});
   </script>
 </body>
 </html>"""
@@ -1205,7 +1474,7 @@ def build_app(container: Container, loop_controller: BotLoopController | None = 
         exchange_open_orders, exchange_open_orders_error = status_service.fetch_exchange_open_orders(asset)
         latest_snapshot = container.repositories.get_latest_market_snapshot(asset)
         market_chart = _build_market_chart(container, latest_snapshot)
-        ttl_seconds = max(int(container.config.bot.polling_interval_seconds), 15)
+        ttl_seconds = _DASHBOARD_REFRESH_SECONDS
 
         exchange_cache["exchange_open_orders"] = exchange_open_orders
         exchange_cache["exchange_open_orders_error"] = exchange_open_orders_error
