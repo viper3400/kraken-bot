@@ -1,4 +1,5 @@
 import json
+import re
 import tomllib
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -292,7 +293,6 @@ def test_render_dashboard_formats_runtime_timestamps_in_local_time(tmp_path: Pat
         "%Y-%m-%d %H:%M:%S"
     )
     expected_order_time = datetime(2026, 6, 27, 12, 0, tzinfo=timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S")
-
     dashboard = render_dashboard(
         status,
         "paper",
@@ -314,6 +314,7 @@ def test_render_dashboard_formats_runtime_timestamps_in_local_time(tmp_path: Pat
     assert expected_order_time in dashboard
     assert "+02:00" not in dashboard
     assert "2026-06-27T12:00:00+00:00" not in dashboard
+    assert re.search(r"Refreshed at \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} · Timezone:", dashboard)
     assert f"Timezone: {expected_timezone_label}" in dashboard
 
 
@@ -423,3 +424,32 @@ def test_dashboard_recent_tables_are_filtered_to_configured_asset(tmp_path: Path
     assert "trade-2" not in dashboard
     assert "order-2" not in dashboard
     assert "<th>Asset</th>" not in dashboard
+
+
+def test_dashboard_client_chart_labels_use_local_time_formatter(tmp_path: Path) -> None:
+    repositories = build_repositories(tmp_path)
+    container = DummyContainer(repositories)
+    status = StatusService(repositories, container.reporting_service, container.exchange, container.config).get_status("XBT/EUR")
+    dashboard = render_dashboard(status, "paper", {"running": True, "cycle_count": 3})
+
+    assert "function formatLocalDateTimeShort(value)" in dashboard
+    assert 'formatLocalDateTimeShort(normalized[0].time)' in dashboard
+    assert '.replace("T", " ").slice(0, 16)' not in dashboard
+
+
+def test_initial_chart_render_formats_labels_in_local_time(tmp_path: Path) -> None:
+    repositories = build_repositories(tmp_path)
+    container = DummyContainer(repositories)
+    app = build_app(container)
+    collected = {}
+
+    def start_response(status_line, headers):
+        collected["status"] = status_line
+        collected["headers"] = headers
+
+    body = b"".join(app({"PATH_INFO": "/"}, start_response)).decode("utf-8")
+    expected_chart_first_label = datetime(2026, 6, 27, 8, 0, tzinfo=timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
+
+    assert collected["status"] == "200 OK"
+    assert expected_chart_first_label in body
+    assert "2026-06-27T08:00:00+00:00" not in body

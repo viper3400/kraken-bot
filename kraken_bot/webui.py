@@ -57,6 +57,11 @@ def _format_local_datetime(value: object) -> str:
     return dt.astimezone().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _format_local_datetime_short(value: object) -> str:
+    formatted = _format_local_datetime(value)
+    return formatted[:-3] if len(formatted) >= 16 else formatted
+
+
 def _local_timezone_label() -> str:
     tzinfo = datetime.now().astimezone().tzinfo
     if tzinfo is None:
@@ -316,9 +321,9 @@ def _render_market_chart(chart_payload: dict[str, object] | None) -> str:
         f"{html.escape(StatusService.format_decimal(tick_value, places=2))}</text>"
         for tick_value, tick_y in price_ticks
     )
-    first_label = _format_local_datetime(points[0]["time"])
-    mid_label = _format_local_datetime(points[len(points) // 2]["time"])
-    last_label = _format_local_datetime(points[-1]["time"])
+    first_label = _format_local_datetime_short(points[0]["time"])
+    mid_label = _format_local_datetime_short(points[len(points) // 2]["time"])
+    last_label = _format_local_datetime_short(points[-1]["time"])
     meta = [
         f"<span class='mini-tag'>Trend TF: {html.escape(str(chart_payload.get('timeframe', '-')))}</span>",
         f"<span class='mini-tag'>Candles: {len(points)}</span>",
@@ -890,7 +895,7 @@ def render_dashboard(
       <h2>Recent Logs</h2>
       <div id="recent-logs-root">{recent_logs}</div>
       <div class="footer" id="dashboard-footer">
-        <span id="dashboard-refresh-meta">Refreshed at {html.escape(status.generated_at.isoformat())} · Timezone: {html.escape(timezone_label)}</span>
+        <span id="dashboard-refresh-meta">Refreshed at {html.escape(_format_local_datetime(status.generated_at))} · Timezone: {html.escape(timezone_label)}</span>
         <span> · App Version: <span id="dashboard-app-version">{html.escape(app_version)}</span></span>
       </div>
     </section>
@@ -930,6 +935,11 @@ def render_dashboard(
       const minutes = String(date.getMinutes()).padStart(2, "0");
       const seconds = String(date.getSeconds()).padStart(2, "0");
       return `${{year}}-${{month}}-${{day}} ${{hours}}:${{minutes}}:${{seconds}}`;
+    }}
+
+    function formatLocalDateTimeShort(value) {{
+      const formatted = formatLocalDateTime(value);
+      return formatted === "-" ? formatted : formatted.slice(0, 16);
     }}
 
     function formatDecimal(value, places = null) {{
@@ -1253,9 +1263,9 @@ def render_dashboard(
         `<text class="price-label" x="${{(width - right - 4).toFixed(2)}}" y="${{(tick.y - 4).toFixed(2)}}" text-anchor="end">${{escapeHtml(tick.value.toFixed(2))}}</text>`
       ).join("");
 
-      const firstLabel = escapeHtml(normalized[0].time.replace("T", " ").slice(0, 16));
-      const midLabel = escapeHtml(normalized[Math.floor(normalized.length / 2)].time.replace("T", " ").slice(0, 16));
-      const lastLabel = escapeHtml(normalized[normalized.length - 1].time.replace("T", " ").slice(0, 16));
+      const firstLabel = escapeHtml(formatLocalDateTimeShort(normalized[0].time));
+      const midLabel = escapeHtml(formatLocalDateTimeShort(normalized[Math.floor(normalized.length / 2)].time));
+      const lastLabel = escapeHtml(formatLocalDateTimeShort(normalized[normalized.length - 1].time));
       const meta = [
         `<span class="mini-tag">Trend TF: ${{escapeHtml(chart.timeframe || "-")}}</span>`,
         `<span class="mini-tag">Candles: ${{normalized.length}}</span>`,
