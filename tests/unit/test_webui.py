@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
-from kraken_bot.domain.enums import Decision, OrderStatus, OrderType, TradeStatus
+from kraken_bot.domain.enums import Decision, MarketRegime, OrderStatus, OrderType, TradeStatus
 from kraken_bot.domain.models import Candle, ExchangeOpenOrder, MarketSnapshot, Order, StrategyDecision, Trade
 from kraken_bot.persistence.repositories import SqliteRepositories
 from kraken_bot.persistence.sqlite import SqlitePersistence
@@ -150,6 +150,8 @@ def build_repositories(tmp_path: Path) -> SqliteRepositories:
             id="trade-1",
             asset="XBT/EUR",
             quantity=Decimal("1"),
+            buy_order_id="order-1",
+            sell_order_id="order-1-sell",
             buy_time=recent_sell_time - timedelta(minutes=10),
             sell_time=recent_sell_time,
             buy_price=Decimal("100.00"),
@@ -161,6 +163,8 @@ def build_repositories(tmp_path: Path) -> SqliteRepositories:
             net_profit=Decimal("0.48"),
             holding_duration_seconds=600,
             status=TradeStatus.CLOSED,
+            strategy_name="trend_pullback",
+            regime=MarketRegime.TREND,
             created_at=now,
         )
     )
@@ -271,6 +275,15 @@ def test_render_dashboard_function_produces_html(tmp_path: Path) -> None:
     assert "Active" in dashboard
     assert f"App Version: <span id=\"dashboard-app-version\">{app_version()}</span>" in dashboard
     assert "<th>Asset</th>" not in dashboard
+    assert "<th>Trade</th>" in dashboard
+    assert "<th>Order</th>" in dashboard
+    assert "Buy Total 100.16" in dashboard
+    assert "Sell Total 100.64" in dashboard
+    assert "Regime TREND" in dashboard
+    assert "Strategy trend_pullback" in dashboard
+    assert "Buy Order order-1" in dashboard
+    assert "Sell Order order-1-sell" in dashboard
+    assert "Notional 100.00" in dashboard
 
 
 def test_render_dashboard_formats_runtime_timestamps_in_local_time(tmp_path: Path) -> None:
