@@ -73,6 +73,15 @@ kraken:
   api_secret_env: KRAKEN_API_SECRET
 ```
 
+Demo mode is opt-in through `bot.mode` and only seeds when the SQLite database has no dashboard data yet:
+
+```yaml
+bot:
+  mode: demo
+```
+
+When `bot.mode: demo`, startup inserts representative snapshots, decisions, trades, orders, and logs into an empty database so the web UI has content immediately. Existing data is left untouched. Kraken credentials are optional in demo mode so the UI can be launched locally just to inspect the dashboard.
+
 ### Available Modes
 
 The `bot.mode` setting currently accepts these values:
@@ -80,6 +89,7 @@ The `bot.mode` setting currently accepts these values:
 - `live`: intended for real Kraken execution against private API endpoints
 - `paper`: intended for simulated trading without sending real exchange orders
 - `backtest`: intended for replaying historical data
+- `demo`: intended for seeding an empty SQLite database with representative UI data
 
 Current implementation status:
 
@@ -89,6 +99,7 @@ Current implementation status:
 - private Kraken order status and cancellation are still scaffolded
 - `paper` is not yet a full simulation engine
 - `backtest` is declared in config, but not implemented yet
+- `demo` seeds local dashboard data and skips the need for Kraken credentials
 
 So for the current codebase, `mode` is partly architectural and not yet a complete execution abstraction.
 

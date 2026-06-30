@@ -430,11 +430,10 @@ def render_dashboard(
     )
 
     recent_trades = _render_table(
-        ["Trade ID", "Asset", "Qty", "Buy", "Sell", "Net", "Status", "Created"],
+        ["Trade ID", "Qty", "Buy", "Sell", "Net", "Status", "Created"],
         [
             [
                 trade.id,
-                trade.asset,
                 format(trade.quantity, "f"),
                 StatusService.format_decimal(trade.buy_price),
                 StatusService.format_decimal(trade.sell_price),
@@ -463,11 +462,10 @@ def render_dashboard(
         table_class="table-compact table-recent-orders",
     )
     exchange_open_orders = _render_table(
-        ["Exchange ID", "Asset", "Type", "Price", "Qty", "Filled", "Status", "Opened"],
+        ["Exchange ID", "Type", "Price", "Qty", "Filled", "Status", "Opened"],
         [
             [
                 order.exchange_order_id,
-                order.asset,
                 order.type.value,
                 format(order.price, "f"),
                 format(order.quantity, "f"),

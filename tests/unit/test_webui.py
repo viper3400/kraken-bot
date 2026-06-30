@@ -261,6 +261,7 @@ def test_render_dashboard_function_produces_html(tmp_path: Path) -> None:
     assert "Cooldown Left" in dashboard
     assert "Active" in dashboard
     assert f"App Version: <span id=\"dashboard-app-version\">{app_version()}</span>" in dashboard
+    assert "<th>Asset</th>" not in dashboard
 
 
 def test_render_dashboard_formats_runtime_timestamps_in_local_time(tmp_path: Path) -> None:
@@ -367,3 +368,50 @@ def test_api_status_reuses_cached_exchange_data_within_poll_window(tmp_path: Pat
     assert json.loads(second)["market_chart"]["timeframe"] == "15m"
     assert container.exchange.list_open_orders_calls == 1
     assert container.exchange.get_ohlc_calls == 1
+
+
+def test_dashboard_recent_tables_are_filtered_to_configured_asset(tmp_path: Path) -> None:
+    repositories = build_repositories(tmp_path)
+    other_time = datetime(2026, 6, 27, 12, 5, tzinfo=timezone.utc)
+    repositories.insert_trade(
+        Trade(
+            id="trade-2",
+            asset="ETH/EUR",
+            quantity=Decimal("2"),
+            buy_time=other_time - timedelta(minutes=15),
+            sell_time=other_time,
+            buy_price=Decimal("200.00"),
+            sell_price=Decimal("201.00"),
+            buy_fee=Decimal("0.20"),
+            sell_fee=Decimal("0.20"),
+            gross_profit=Decimal("2.00"),
+            total_fees=Decimal("0.40"),
+            net_profit=Decimal("1.60"),
+            holding_duration_seconds=900,
+            status=TradeStatus.CLOSED,
+            created_at=other_time,
+        )
+    )
+    repositories.insert_order(
+        Order(
+            id="order-2",
+            trade_id="trade-2",
+            time=other_time,
+            type=OrderType.SELL,
+            price=Decimal("201.00"),
+            quantity=Decimal("2"),
+            status=OrderStatus.FILLED,
+            post_only=True,
+            exchange_id="ex-2",
+            created_at=other_time,
+        )
+    )
+    container = DummyContainer(repositories)
+    status = StatusService(repositories, container.reporting_service, container.exchange, container.config).get_status("XBT/EUR")
+    dashboard = render_dashboard(status, "paper", {"running": True, "cycle_count": 3})
+
+    assert [trade.id for trade in status.recent_trades] == ["trade-1"]
+    assert [order.id for order in status.recent_orders] == ["order-1"]
+    assert "trade-2" not in dashboard
+    assert "order-2" not in dashboard
+    assert "<th>Asset</th>" not in dashboard

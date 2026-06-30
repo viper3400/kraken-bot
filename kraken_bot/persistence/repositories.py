@@ -26,6 +26,14 @@ class SqliteRepositories:
     def __init__(self, sqlite: SqlitePersistence) -> None:
         self.sqlite = sqlite
 
+    def has_any_dashboard_data(self) -> bool:
+        with self.sqlite.connect() as connection:
+            for table in ("trades", "orders", "market_snapshots", "strategy_decisions", "logs"):
+                row = connection.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone()
+                if row is not None:
+                    return True
+        return False
+
     def insert_trade(self, trade: Trade) -> None:
         with self.sqlite.connect() as connection:
             connection.execute(
@@ -417,20 +425,39 @@ class SqliteRepositories:
             rows = connection.execute("SELECT * FROM trades ORDER BY created_at ASC").fetchall()
         return [self._row_to_trade(row) for row in rows]
 
-    def list_recent_trades(self, limit: int = 10) -> list[Trade]:
+    def list_recent_trades(self, limit: int = 10, asset: str | None = None) -> list[Trade]:
         with self.sqlite.connect() as connection:
-            rows = connection.execute(
-                "SELECT * FROM trades ORDER BY created_at DESC LIMIT ?",
-                (limit,),
-            ).fetchall()
+            if asset is None:
+                rows = connection.execute(
+                    "SELECT * FROM trades ORDER BY created_at DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    "SELECT * FROM trades WHERE asset = ? ORDER BY created_at DESC LIMIT ?",
+                    (asset, limit),
+                ).fetchall()
         return [self._row_to_trade(row) for row in rows]
 
-    def list_recent_orders(self, limit: int = 10) -> list[Order]:
+    def list_recent_orders(self, limit: int = 10, asset: str | None = None) -> list[Order]:
         with self.sqlite.connect() as connection:
-            rows = connection.execute(
-                "SELECT * FROM orders ORDER BY created_at DESC LIMIT ?",
-                (limit,),
-            ).fetchall()
+            if asset is None:
+                rows = connection.execute(
+                    "SELECT * FROM orders ORDER BY created_at DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """
+                    SELECT o.*
+                    FROM orders o
+                    JOIN trades t ON t.id = o.trade_id
+                    WHERE t.asset = ?
+                    ORDER BY o.created_at DESC
+                    LIMIT ?
+                    """,
+                    (asset, limit),
+                ).fetchall()
         return [self._row_to_order(row) for row in rows]
 
     def list_recent_logs(self, limit: int = 20) -> list[LogEntry]:
