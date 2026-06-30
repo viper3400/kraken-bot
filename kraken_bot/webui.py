@@ -21,6 +21,7 @@ from kraken_bot.services.market_data_service import calculate_ema
 from kraken_bot.services.status_service import BotStatus, StatusService
 
 _RULE_DETAIL_NUMBER_PATTERN = re.compile(r"(?<![\w.])[-+]?(?:\d+\.\d{3,}|\.\d{3,}|\d+(?:\.\d+)?[eE][-+]?\d+)")
+_DASHBOARD_REFRESH_SECONDS = 15
 
 
 @cache
@@ -405,14 +406,14 @@ def render_dashboard(
         _render_metric("Last Error", str(runtime.get("last_error") or "-"), "runtime-last-error"),
     ]
     pnl_cards = [
-        _render_metric("Net PnL", format(metrics.net_profit, "f")),
-        _render_metric("Gross PnL", format(metrics.gross_profit, "f")),
-        _render_metric("Fees", format(metrics.fees, "f")),
-        _render_metric("Win Rate %", format(metrics.win_rate, "f")),
-        _render_metric("Trades", str(metrics.total_trades)),
-        _render_metric("Open Trades", str(metrics.open_trades)),
-        _render_metric("Closed Trades", str(metrics.closed_trades)),
-        _render_metric("Avg Hold", str(metrics.average_holding_duration)),
+        _render_metric("Net PnL", format(metrics.net_profit, "f"), "metric-net-pnl"),
+        _render_metric("Gross PnL", format(metrics.gross_profit, "f"), "metric-gross-pnl"),
+        _render_metric("Fees", format(metrics.fees, "f"), "metric-fees"),
+        _render_metric("Win Rate %", format(metrics.win_rate, "f"), "metric-win-rate"),
+        _render_metric("Trades", str(metrics.total_trades), "metric-total-trades"),
+        _render_metric("Open Trades", str(metrics.open_trades), "metric-open-trades"),
+        _render_metric("Closed Trades", str(metrics.closed_trades), "metric-closed-trades"),
+        _render_metric("Avg Hold", str(metrics.average_holding_duration), "metric-average-hold"),
     ]
     open_trade_markup = (
         _render_table(
@@ -845,7 +846,7 @@ def render_dashboard(
       <div class="reason" id="decision-reason"><strong>Decision Reason:</strong> {html.escape(decision_reason)}</div>
     </section>
     <section class="section">
-      <h2>{html.escape(rules_title)}</h2>
+      <h2 id="strategy-rules-title">{html.escape(rules_title)}</h2>
       <p>Rule-by-rule view of the latest strategy evaluation based on persisted snapshot and portfolio state.</p>
       <table>
         <thead>
@@ -866,28 +867,28 @@ def render_dashboard(
     </section>
     <section class="section">
       <h2>Performance</h2>
-      <div class="grid">{''.join(pnl_cards)}</div>
+      <div class="grid" id="performance-grid">{''.join(pnl_cards)}</div>
     </section>
     <section class="section">
       <h2>Open Trade</h2>
-      {open_trade_markup}
+      <div id="open-trade-root">{open_trade_markup}</div>
     </section>
     <section class="section">
       <h2>Recent Orders</h2>
-      {recent_orders}
+      <div id="recent-orders-root">{recent_orders}</div>
     </section>
     <section class="section">
       <h2>Kraken Open Orders</h2>
-      <p>{exchange_open_orders_summary}</p>
-      {exchange_open_orders}
+      <p id="exchange-open-orders-summary">{exchange_open_orders_summary}</p>
+      <div id="exchange-open-orders-root">{exchange_open_orders}</div>
     </section>
     <section class="section">
       <h2>Recent Trades</h2>
-      {recent_trades}
+      <div id="recent-trades-root">{recent_trades}</div>
     </section>
     <section class="section">
       <h2>Recent Logs</h2>
-      {recent_logs}
+      <div id="recent-logs-root">{recent_logs}</div>
       <div class="footer" id="dashboard-footer">
         <span id="dashboard-refresh-meta">Refreshed at {html.escape(status.generated_at.isoformat())} · Timezone: {html.escape(timezone_label)}</span>
         <span> · App Version: <span id="dashboard-app-version">{html.escape(app_version)}</span></span>
@@ -949,9 +950,24 @@ def render_dashboard(
       );
     }}
 
+    function renderTable(headers, rows, tableClass = "") {{
+      const head = headers.map((header) => `<th>${{escapeHtml(header)}}</th>`).join("");
+      const bodyRows = rows.map((row) => {{
+        const cells = row.map((cell) => `<td>${{escapeHtml(cell)}}</td>`).join("");
+        return `<tr>${{cells}}</tr>`;
+      }}).join("");
+      const body = bodyRows || "<tr><td colspan='99'>No data</td></tr>";
+      const classAttr = tableClass ? ` class="${{escapeHtml(tableClass)}}"` : "";
+      return `<div class="table-wrap"><table${{classAttr}}><thead><tr>${{head}}</tr></thead><tbody>${{body}}</tbody></table></div>`;
+    }}
+
     function renderRules(strategyRules) {{
+      const title = document.getElementById("strategy-rules-title");
       const body = document.getElementById("rules-table-body");
       if (!body || !strategyRules) return;
+      if (title) {{
+        title.textContent = strategyRules.context === "sell" ? "SELL Rules" : "BUY Rules";
+      }}
       const rules = Array.isArray(strategyRules.rules) ? strategyRules.rules : [];
       body.innerHTML = rules.map((rule) => {{
         const [label, state, detail] = Array.isArray(rule) ? rule : ["Rule", "UNKNOWN", ""];
@@ -967,6 +983,112 @@ def render_dashboard(
           </tr>
         `;
       }}).join("") || '<tr><td colspan="3">No data</td></tr>';
+    }}
+
+    function renderPerformance(reportMetrics) {{
+      setText("metric-net-pnl", formatDecimal(reportMetrics?.net_profit));
+      setText("metric-gross-pnl", formatDecimal(reportMetrics?.gross_profit));
+      setText("metric-fees", formatDecimal(reportMetrics?.fees));
+      setText("metric-win-rate", formatDecimal(reportMetrics?.win_rate));
+      setText("metric-total-trades", String(reportMetrics?.total_trades ?? 0));
+      setText("metric-open-trades", String(reportMetrics?.open_trades ?? 0));
+      setText("metric-closed-trades", String(reportMetrics?.closed_trades ?? 0));
+      setText("metric-average-hold", String(reportMetrics?.average_holding_duration ?? "-"));
+    }}
+
+    function renderOpenTrade(openTrade) {{
+      const root = document.getElementById("open-trade-root");
+      if (!root) return;
+      if (!openTrade) {{
+        root.innerHTML = "<div class='empty'>No open trade</div>";
+        return;
+      }}
+      root.innerHTML = renderTable(
+        ["Trade ID", "Qty", "Buy Price", "Buy Time", "Status"],
+        [[
+          String(openTrade.id || "-"),
+          formatDecimal(openTrade.quantity),
+          formatDecimal(openTrade.buy_price),
+          formatLocalDateTime(openTrade.buy_time),
+          `${{String(openTrade.status || "-")}} / ${{String(openTrade.strategy_name || "-")}}`,
+        ]]
+      );
+    }}
+
+    function renderRecentOrders(orders) {{
+      const root = document.getElementById("recent-orders-root");
+      if (!root) return;
+      const rows = (Array.isArray(orders) ? orders : []).map((order) => [
+        String(order.id || "-"),
+        String(order.trade_id || "-"),
+        String(order.type || "-"),
+        formatDecimal(order.price),
+        formatDecimal(order.quantity),
+        String(order.status || "-"),
+        String(order.exchange_id || "-"),
+        formatLocalDateTime(order.time),
+      ]);
+      root.innerHTML = renderTable(
+        ["Order ID", "Trade ID", "Type", "Price", "Qty", "Status", "Exchange ID", "Time"],
+        rows,
+        "table-compact table-recent-orders"
+      );
+    }}
+
+    function renderExchangeOpenOrders(asset, orders, error) {{
+      const summary = document.getElementById("exchange-open-orders-summary");
+      if (summary) {{
+        summary.textContent = error ? `Kraken fetch error: ${{error}}` : `Live Kraken open orders for ${{asset || "-"}}.`;
+      }}
+      const root = document.getElementById("exchange-open-orders-root");
+      if (!root) return;
+      const rows = (Array.isArray(orders) ? orders : []).map((order) => [
+        String(order.exchange_order_id || "-"),
+        String(order.type || "-"),
+        formatDecimal(order.price),
+        formatDecimal(order.quantity),
+        formatDecimal(order.filled_quantity),
+        String(order.status || "-"),
+        formatLocalDateTime(order.opened_at),
+      ]);
+      root.innerHTML = renderTable(
+        ["Exchange ID", "Type", "Price", "Qty", "Filled", "Status", "Opened"],
+        rows
+      );
+    }}
+
+    function renderRecentTrades(trades) {{
+      const root = document.getElementById("recent-trades-root");
+      if (!root) return;
+      const rows = (Array.isArray(trades) ? trades : []).map((trade) => [
+        String(trade.id || "-"),
+        formatDecimal(trade.quantity),
+        formatDecimal(trade.buy_price),
+        formatDecimal(trade.sell_price),
+        formatDecimal(trade.net_profit),
+        String(trade.status || "-"),
+        formatLocalDateTime(trade.created_at),
+      ]);
+      root.innerHTML = renderTable(
+        ["Trade ID", "Qty", "Buy", "Sell", "Net", "Status", "Created"],
+        rows
+      );
+    }}
+
+    function renderRecentLogs(logs) {{
+      const root = document.getElementById("recent-logs-root");
+      if (!root) return;
+      const rows = (Array.isArray(logs) ? logs : []).map((log) => [
+        formatLocalDateTime(log.time),
+        String(log.level || "-"),
+        String(log.service || "-"),
+        String(log.message || "-"),
+        String(log.context_json || "-"),
+      ]);
+      root.innerHTML = renderTable(
+        ["Time", "Level", "Service", "Message", "Context"],
+        rows
+      );
     }}
 
     function refreshStatusFields(payload) {{
@@ -1024,6 +1146,12 @@ def render_dashboard(
 
       setText("dashboard-app-version", payload.app_version || "unknown");
 
+      renderPerformance(payload.report_metrics || null);
+      renderOpenTrade(payload.open_trade || null);
+      renderRecentOrders(payload.recent_orders || []);
+      renderExchangeOpenOrders(payload.asset || "-", payload.exchange_open_orders || [], payload.exchange_open_orders_error || null);
+      renderRecentTrades(payload.recent_trades || []);
+      renderRecentLogs(payload.recent_logs || []);
       renderRules(payload.strategy_rules);
     }}
 
@@ -1179,7 +1307,7 @@ def render_dashboard(
     }}
 
     refreshDashboardVisuals();
-    window.setInterval(refreshDashboardVisuals, 5000);
+    window.setInterval(refreshDashboardVisuals, {_DASHBOARD_REFRESH_SECONDS * 1000});
   </script>
 </body>
 </html>"""
@@ -1203,7 +1331,7 @@ def build_app(container: Container, loop_controller: BotLoopController | None = 
         exchange_open_orders, exchange_open_orders_error = status_service.fetch_exchange_open_orders(asset)
         latest_snapshot = container.repositories.get_latest_market_snapshot(asset)
         market_chart = _build_market_chart(container, latest_snapshot)
-        ttl_seconds = max(int(container.config.bot.polling_interval_seconds), 15)
+        ttl_seconds = _DASHBOARD_REFRESH_SECONDS
 
         exchange_cache["exchange_open_orders"] = exchange_open_orders
         exchange_cache["exchange_open_orders_error"] = exchange_open_orders_error

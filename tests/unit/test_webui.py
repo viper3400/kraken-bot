@@ -209,8 +209,16 @@ def test_render_dashboard_contains_status_content(tmp_path: Path) -> None:
     assert "id=\"metric-snapshot-time\"" in body or "id='metric-snapshot-time'" in body
     assert "id=\"metric-price\"" in body or "id='metric-price'" in body
     assert "id=\"metric-cooldown\"" in body or "id='metric-cooldown'" in body
+    assert "id=\"metric-net-pnl\"" in body or "id='metric-net-pnl'" in body
     assert "id=\"rules-table-body\"" in body or "id='rules-table-body'" in body
+    assert "id=\"strategy-rules-title\"" in body or "id='strategy-rules-title'" in body
+    assert "id=\"open-trade-root\"" in body or "id='open-trade-root'" in body
+    assert "id=\"recent-orders-root\"" in body or "id='recent-orders-root'" in body
+    assert "id=\"exchange-open-orders-root\"" in body or "id='exchange-open-orders-root'" in body
+    assert "id=\"recent-trades-root\"" in body or "id='recent-trades-root'" in body
+    assert "id=\"recent-logs-root\"" in body or "id='recent-logs-root'" in body
     assert "refreshStatusFields(payload)" in body
+    assert "renderRecentTrades(payload.recent_trades || [])" in body
     assert "price 71.73 / ema20 70.78 / ema50 70.80" in body
     assert "1.35% in [0.5, 1.5]" in body
     assert "70.77571074593162710453145120" not in body
