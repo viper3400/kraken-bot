@@ -21,9 +21,6 @@ from kraken_bot.services.market_data_service import calculate_ema
 from kraken_bot.services.status_service import BotStatus, StatusService
 
 _RULE_DETAIL_NUMBER_PATTERN = re.compile(r"(?<![\w.])[-+]?(?:\d+\.\d{3,}|\.\d{3,}|\d+(?:\.\d+)?[eE][-+]?\d+)")
-_DASHBOARD_REFRESH_SECONDS = 15
-
-
 @cache
 def _app_version() -> str:
     pyproject_path = Path(__file__).resolve().parent.parent / "pyproject.toml"
@@ -483,6 +480,7 @@ def render_dashboard(
     metrics = status.report_metrics
     cooldown_status = status.cooldown_status
     runtime = runtime or {}
+    refresh_seconds = max(int(runtime.get("polling_interval_seconds") or 30), 1)
     strategy_snapshot = _strategy_snapshot(status)
     rules_title = "SELL Rules" if strategy_snapshot["context"] == "sell" else "BUY Rules"
 
@@ -1456,7 +1454,7 @@ def render_dashboard(
     }}
 
     refreshDashboardVisuals();
-    window.setInterval(refreshDashboardVisuals, {_DASHBOARD_REFRESH_SECONDS * 1000});
+    window.setInterval(refreshDashboardVisuals, {refresh_seconds * 1000});
   </script>
 </body>
 </html>"""
@@ -1480,7 +1478,7 @@ def build_app(container: Container, loop_controller: BotLoopController | None = 
         exchange_open_orders, exchange_open_orders_error = status_service.fetch_exchange_open_orders(asset)
         latest_snapshot = container.repositories.get_latest_market_snapshot(asset)
         market_chart = _build_market_chart(container, latest_snapshot)
-        ttl_seconds = _DASHBOARD_REFRESH_SECONDS
+        ttl_seconds = max(int(container.config.bot.polling_interval_seconds), 1)
 
         exchange_cache["exchange_open_orders"] = exchange_open_orders
         exchange_cache["exchange_open_orders_error"] = exchange_open_orders_error
