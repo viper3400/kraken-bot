@@ -104,6 +104,39 @@ def _render_metric(label: str, value: str, value_id: str | None = None) -> str:
     )
 
 
+def _metric_id_slug(value: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9_-]", "-", value or "unknown")
+
+
+def _render_performance_cards(metrics, prefix: str) -> str:
+    cards = [
+        _render_metric("Net PnL", format(metrics.net_profit, "f"), f"metric-{prefix}net-pnl"),
+        _render_metric("Gross PnL", format(metrics.gross_profit, "f"), f"metric-{prefix}gross-pnl"),
+        _render_metric("Fees", format(metrics.fees, "f"), f"metric-{prefix}fees"),
+        _render_metric("Win Rate %", format(metrics.win_rate, "f"), f"metric-{prefix}win-rate"),
+        _render_metric("Trades", str(metrics.total_trades), f"metric-{prefix}total-trades"),
+        _render_metric("Open Trades", str(metrics.open_trades), f"metric-{prefix}open-trades"),
+        _render_metric("Closed Trades", str(metrics.closed_trades), f"metric-{prefix}closed-trades"),
+        _render_metric("Avg Hold", str(metrics.average_holding_duration), f"metric-{prefix}average-hold"),
+    ]
+    return "".join(cards)
+
+
+def _render_strategy_performance_sections(strategy_reports: dict[str, object], prefix: str, empty_label: str) -> str:
+    if not strategy_reports:
+        return f"<div class='empty'>{html.escape(empty_label)}</div>"
+    sections: list[str] = []
+    for strategy_name, metrics in strategy_reports.items():
+        safe_strategy_name = _metric_id_slug(strategy_name)
+        sections.append(
+            "<div class='strategy-performance-block'>"
+            f"<h4 class='strategy-performance-title'>{html.escape(strategy_name)}</h4>"
+            f"<div class='performance-grid compact-grid'>{_render_performance_cards(metrics, f'{prefix}{safe_strategy_name}-')}</div>"
+            "</div>"
+        )
+    return "".join(sections)
+
+
 def _render_table(headers: list[str], rows: list[list[str]], table_class: str = "") -> str:
     head = "".join(f"<th>{html.escape(header)}</th>" for header in headers)
     body_rows = []
@@ -478,6 +511,9 @@ def render_dashboard(
     latest_decision = status.latest_strategy_decision
     open_trade = status.open_trade
     metrics = status.report_metrics
+    today_metrics = status.today_report_metrics
+    strategy_metrics = status.strategy_report_metrics
+    today_strategy_metrics = status.today_strategy_report_metrics
     cooldown_status = status.cooldown_status
     runtime = runtime or {}
     refresh_seconds = max(int(runtime.get("polling_interval_seconds") or 30), 1)
@@ -515,16 +551,18 @@ def render_dashboard(
         _render_metric("Last Cycle", _format_local_datetime(runtime.get("last_cycle_at")), "runtime-last-cycle"),
         _render_metric("Last Error", str(runtime.get("last_error") or "-"), "runtime-last-error"),
     ]
-    pnl_cards = [
-        _render_metric("Net PnL", format(metrics.net_profit, "f"), "metric-net-pnl"),
-        _render_metric("Gross PnL", format(metrics.gross_profit, "f"), "metric-gross-pnl"),
-        _render_metric("Fees", format(metrics.fees, "f"), "metric-fees"),
-        _render_metric("Win Rate %", format(metrics.win_rate, "f"), "metric-win-rate"),
-        _render_metric("Trades", str(metrics.total_trades), "metric-total-trades"),
-        _render_metric("Open Trades", str(metrics.open_trades), "metric-open-trades"),
-        _render_metric("Closed Trades", str(metrics.closed_trades), "metric-closed-trades"),
-        _render_metric("Avg Hold", str(metrics.average_holding_duration), "metric-average-hold"),
-    ]
+    overall_pnl_cards = _render_performance_cards(metrics, "")
+    today_pnl_cards = _render_performance_cards(today_metrics, "today-")
+    overall_strategy_sections = _render_strategy_performance_sections(
+        strategy_metrics,
+        "strategy-",
+        "No strategy-specific performance yet",
+    )
+    today_strategy_sections = _render_strategy_performance_sections(
+        today_strategy_metrics,
+        "today-strategy-",
+        "No strategy-specific performance for today",
+    )
     open_trade_markup = (
         _render_table(
             ["Trade ID", "Qty", "Buy Price", "Buy Time", "Status"],
@@ -900,10 +938,88 @@ def render_dashboard(
       color: var(--muted);
       font-size: 0.9rem;
     }}
+    .subsection-title {{
+      margin: 0;
+      font-size: 1rem;
+      color: var(--muted);
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }}
+    .performance-section {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 14px;
+      margin-top: 14px;
+    }}
+    .performance-panel {{
+      padding: 14px;
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.7), rgba(247,241,231,0.92));
+    }}
+    .performance-panel-header {{
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid rgba(217, 208, 194, 0.8);
+    }}
+    .performance-panel-note {{
+      color: var(--muted);
+      font-size: 0.82rem;
+      font-family: var(--mono);
+      white-space: nowrap;
+    }}
+    .performance-grid {{
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+    }}
+    .compact-grid {{
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      margin-top: 0;
+    }}
+    .performance-grid .card.metric,
+    .compact-grid .card.metric {{
+      padding: 10px 10px 9px;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.82);
+    }}
+    .performance-grid .metric .label,
+    .compact-grid .metric .label {{
+      font-size: 0.72rem;
+      letter-spacing: 0.05em;
+    }}
+    .performance-grid .metric .value,
+    .compact-grid .metric .value {{
+      margin-top: 5px;
+      font-size: 0.96rem;
+      line-height: 1.15;
+    }}
+    .strategy-performance-block {{
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid var(--border);
+    }}
+    .strategy-performance-title {{
+      margin: 0 0 8px;
+      font-size: 0.9rem;
+      color: var(--ink);
+      font-family: var(--mono);
+    }}
     @media (max-width: 760px) {{
       .two-col {{ grid-template-columns: 1fr; }}
       .wrap {{ padding: 16px 12px 28px; }}
       .hero, .section {{ border-radius: 14px; }}
+      .performance-section {{ grid-template-columns: 1fr; }}
+      .performance-grid,
+      .compact-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+      .performance-panel-header {{
+        flex-direction: column;
+        align-items: flex-start;
+      }}
     }}
   </style>
 </head>
@@ -948,7 +1064,24 @@ def render_dashboard(
     </section>
     <section class="section">
       <h2>Performance</h2>
-      <div class="grid" id="performance-grid">{''.join(pnl_cards)}</div>
+      <div class="performance-section">
+        <div class="performance-panel">
+          <div class="performance-panel-header">
+            <h3 class="subsection-title">Overall</h3>
+            <span class="performance-panel-note">All recorded trades</span>
+          </div>
+          <div class="performance-grid" id="performance-grid">{overall_pnl_cards}</div>
+          <div id="performance-by-strategy-root">{overall_strategy_sections}</div>
+        </div>
+        <div class="performance-panel">
+          <div class="performance-panel-header">
+            <h3 class="subsection-title">Today</h3>
+            <span class="performance-panel-note">Current local day</span>
+          </div>
+          <div class="performance-grid" id="performance-today-grid">{today_pnl_cards}</div>
+          <div id="performance-today-by-strategy-root">{today_strategy_sections}</div>
+        </div>
+      </div>
     </section>
     <section class="section">
       <h2>Open Trade</h2>
@@ -1102,15 +1235,62 @@ def render_dashboard(
       }}).join("") || '<tr><td colspan="3">No data</td></tr>';
     }}
 
-    function renderPerformance(reportMetrics) {{
-      setText("metric-net-pnl", formatDecimal(reportMetrics?.net_profit));
-      setText("metric-gross-pnl", formatDecimal(reportMetrics?.gross_profit));
-      setText("metric-fees", formatDecimal(reportMetrics?.fees));
-      setText("metric-win-rate", formatDecimal(reportMetrics?.win_rate));
-      setText("metric-total-trades", String(reportMetrics?.total_trades ?? 0));
-      setText("metric-open-trades", String(reportMetrics?.open_trades ?? 0));
-      setText("metric-closed-trades", String(reportMetrics?.closed_trades ?? 0));
-      setText("metric-average-hold", String(reportMetrics?.average_holding_duration ?? "-"));
+    function renderPerformance(prefix, reportMetrics) {{
+      const idPrefix = prefix ? `${{prefix}}-` : "";
+      setText(`metric-${{idPrefix}}net-pnl`, formatDecimal(reportMetrics?.net_profit));
+      setText(`metric-${{idPrefix}}gross-pnl`, formatDecimal(reportMetrics?.gross_profit));
+      setText(`metric-${{idPrefix}}fees`, formatDecimal(reportMetrics?.fees));
+      setText(`metric-${{idPrefix}}win-rate`, formatDecimal(reportMetrics?.win_rate));
+      setText(`metric-${{idPrefix}}total-trades`, String(reportMetrics?.total_trades ?? 0));
+      setText(`metric-${{idPrefix}}open-trades`, String(reportMetrics?.open_trades ?? 0));
+      setText(`metric-${{idPrefix}}closed-trades`, String(reportMetrics?.closed_trades ?? 0));
+      setText(`metric-${{idPrefix}}average-hold`, String(reportMetrics?.average_holding_duration ?? "-"));
+    }}
+
+    function escapeStrategyMetricPrefix(value) {{
+      return String(value || "unknown").replaceAll(/[^a-zA-Z0-9_-]/g, "-");
+    }}
+
+    function renderStrategyPerformance(containerId, strategyReports, prefix, emptyLabel) {{
+      const root = document.getElementById(containerId);
+      if (!root) return;
+      const entries = Object.entries(strategyReports || {{}});
+      if (!entries.length) {{
+        root.innerHTML = `<div class="empty">${{escapeHtml(emptyLabel)}}</div>`;
+        return;
+      }}
+      root.innerHTML = entries.map(([strategyName]) => {{
+        const safePrefix = `${{prefix}}${{escapeStrategyMetricPrefix(strategyName)}}-`;
+        return `
+          <div class="strategy-performance-block">
+            <h4 class="strategy-performance-title">${{escapeHtml(strategyName)}}</h4>
+            <div class="grid">
+              ${{
+                renderMetricCard("Net PnL", `metric-${{safePrefix}}net-pnl`) +
+                renderMetricCard("Gross PnL", `metric-${{safePrefix}}gross-pnl`) +
+                renderMetricCard("Fees", `metric-${{safePrefix}}fees`) +
+                renderMetricCard("Win Rate %", `metric-${{safePrefix}}win-rate`) +
+                renderMetricCard("Trades", `metric-${{safePrefix}}total-trades`) +
+                renderMetricCard("Open Trades", `metric-${{safePrefix}}open-trades`) +
+                renderMetricCard("Closed Trades", `metric-${{safePrefix}}closed-trades`) +
+                renderMetricCard("Avg Hold", `metric-${{safePrefix}}average-hold`)
+              }}
+            </div>
+          </div>
+        `;
+      }}).join("");
+      for (const [strategyName, metrics] of entries) {{
+        renderPerformance(`${{prefix}}${{escapeStrategyMetricPrefix(strategyName)}}`, metrics);
+      }}
+    }}
+
+    function renderMetricCard(label, valueId) {{
+      return `
+        <div class="card metric">
+          <div class="label">${{escapeHtml(label)}}</div>
+          <div id="${{escapeHtml(valueId)}}" class="value">-</div>
+        </div>
+      `;
     }}
 
     function renderOpenTrade(openTrade) {{
@@ -1293,7 +1473,20 @@ def render_dashboard(
 
       setText("dashboard-app-version", payload.app_version || "unknown");
 
-      renderPerformance(payload.report_metrics || null);
+      renderPerformance("", payload.report_metrics || null);
+      renderPerformance("today", payload.today_report_metrics || null);
+      renderStrategyPerformance(
+        "performance-by-strategy-root",
+        payload.strategy_report_metrics || {{}},
+        "strategy-",
+        "No strategy-specific performance yet"
+      );
+      renderStrategyPerformance(
+        "performance-today-by-strategy-root",
+        payload.today_strategy_report_metrics || {{}},
+        "today-strategy-",
+        "No strategy-specific performance for today"
+      );
       renderOpenTrade(payload.open_trade || null);
       renderRecentOrders(payload.recent_orders || []);
       renderExchangeOpenOrders(payload.asset || "-", payload.exchange_open_orders || [], payload.exchange_open_orders_error || null);
@@ -1571,6 +1764,9 @@ def _status_to_dict(
         "recent_logs": normalize(status.recent_logs),
         "trade_counts": normalize(status.trade_counts),
         "report_metrics": normalize(status.report_metrics),
+        "today_report_metrics": normalize(status.today_report_metrics),
+        "strategy_report_metrics": normalize(status.strategy_report_metrics),
+        "today_strategy_report_metrics": normalize(status.today_strategy_report_metrics),
         "cooldown_status": normalize(status.cooldown_status),
         "strategy_rules": normalize(_strategy_snapshot(status)),
         "market_chart": normalize(market_chart),

@@ -250,6 +250,9 @@ def test_api_status_returns_json(tmp_path: Path) -> None:
     assert payload["app_version"] == app_version()
     assert payload["latest_strategy_decision"]["decision"] == "BUY"
     assert payload["report_metrics"]["net_profit"] == "0.48"
+    assert "today_report_metrics" in payload
+    assert payload["strategy_report_metrics"]["trend_pullback"]["net_profit"] == "0.48"
+    assert "today_strategy_report_metrics" in payload
     assert payload["cooldown_status"]["configured_minutes"] == 20
     assert payload["cooldown_status"]["active"] is True
     assert 1 <= payload["cooldown_status"]["minutes_remaining"] <= 20
@@ -277,6 +280,13 @@ def test_render_dashboard_function_produces_html(tmp_path: Path) -> None:
     assert "price-label" in dashboard
     assert "Cooldown Left" in dashboard
     assert "Active" in dashboard
+    assert "Overall" in dashboard
+    assert "Today" in dashboard
+    assert "id=\"performance-today-grid\"" in dashboard or "id='performance-today-grid'" in dashboard
+    assert "id=\"performance-by-strategy-root\"" in dashboard or "id='performance-by-strategy-root'" in dashboard
+    assert "id=\"performance-today-by-strategy-root\"" in dashboard or "id='performance-today-by-strategy-root'" in dashboard
+    assert "id=\"metric-today-net-pnl\"" in dashboard or "id='metric-today-net-pnl'" in dashboard
+    assert "trend_pullback" in dashboard
     assert f"App Version: <span id=\"dashboard-app-version\">{app_version()}</span>" in dashboard
     assert "<th>Asset</th>" not in dashboard
     assert "<th>Trade</th>" in dashboard
