@@ -266,10 +266,11 @@ def _build_market_chart(container: Container, latest_snapshot) -> dict[str, obje
     timeframe = getattr(trend_config, "trend_timeframe", "5m")
     ema_fast = getattr(trend_config, "ema_fast", 20)
     ema_slow = getattr(trend_config, "ema_slow", 50)
+    candle_limit = max(48, int(ema_fast), int(ema_slow) + 20)
     asset = container.config.bot.asset
 
     try:
-        candles = container.exchange.get_ohlc(asset, timeframe, 48)
+        candles = container.exchange.get_ohlc(asset, timeframe, candle_limit)
     except (KrakenApiError, ValueError, AttributeError) as exc:
         return {"asset": asset, "timeframe": timeframe, "candles": [], "error": str(exc)}
 
@@ -830,13 +831,14 @@ def render_dashboard(
       background: #1b6b43;
     }}
     .swatch-close {{
-      background: #155e63;
+      background: #0f8b8d;
     }}
     .swatch-ema-fast {{
       background: #d37b32;
     }}
     .swatch-ema-slow {{
-      background: #7057b2;
+      background: #7c3aed;
+      border: 1px solid #4c1d95;
     }}
     .swatch-band {{
       background: rgba(66, 129, 182, 0.25);
@@ -854,8 +856,9 @@ def render_dashboard(
     }}
     .line-close {{
       fill: none;
-      stroke: #155e63;
-      stroke-width: 2;
+      stroke: #0f8b8d;
+      stroke-width: 2.4;
+      opacity: 0.92;
     }}
     .line-ema-fast {{
       fill: none;
@@ -864,8 +867,11 @@ def render_dashboard(
     }}
     .line-ema-slow {{
       fill: none;
-      stroke: #7057b2;
-      stroke-width: 2.2;
+      stroke: #7c3aed;
+      stroke-width: 3.2;
+      stroke-dasharray: 10 6;
+      stroke-linecap: round;
+      opacity: 0.98;
     }}
     .candle-wick {{
       stroke-width: 1.4;
@@ -874,12 +880,12 @@ def render_dashboard(
       stroke-width: 1;
     }}
     .candle-up {{
-      stroke: #1b6b43;
-      fill: #1b6b43;
+      stroke: #2e7d32;
+      fill: #2e7d32;
     }}
     .candle-down {{
-      stroke: #9d3c2b;
-      fill: #9d3c2b;
+      stroke: #c04b32;
+      fill: #c04b32;
     }}
     .axis-label {{
       fill: #6f756e;

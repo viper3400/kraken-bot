@@ -25,6 +25,7 @@ class DummyExchange:
     def __init__(self) -> None:
         self.list_open_orders_calls = 0
         self.get_ohlc_calls = 0
+        self.last_ohlc_limit = 0
 
     def list_open_orders(self, asset: str | None = None) -> list[ExchangeOpenOrder]:
         self.list_open_orders_calls += 1
@@ -46,6 +47,7 @@ class DummyExchange:
 
     def get_ohlc(self, asset: str, interval: str, limit: int) -> list[Candle]:
         self.get_ohlc_calls += 1
+        self.last_ohlc_limit = limit
         base = datetime(2026, 6, 27, 8, 0, tzinfo=timezone.utc)
         candles = []
         price = Decimal("99.50")
@@ -254,9 +256,11 @@ def test_api_status_returns_json(tmp_path: Path) -> None:
     assert payload["cooldown_status"]["last_sell_time"] is not None
     assert payload["runtime"]["polling_interval_seconds"] == 30
     assert payload["market_chart"]["timeframe"] == "15m"
-    assert len(payload["market_chart"]["points"]) == 48
+    assert len(payload["market_chart"]["points"]) == 70
+    assert payload["market_chart"]["points"][49]["ema_slow"] is not None
     assert container.exchange.list_open_orders_calls == 1
     assert container.exchange.get_ohlc_calls == 1
+    assert container.exchange.last_ohlc_limit == 70
 
 
 def test_render_dashboard_function_produces_html(tmp_path: Path) -> None:
@@ -284,6 +288,10 @@ def test_render_dashboard_function_produces_html(tmp_path: Path) -> None:
     assert "Buy Order order-1" in dashboard
     assert "Sell Order order-1-sell" in dashboard
     assert "Notional 100.00" in dashboard
+    assert ".line-ema-slow" in dashboard
+    assert "stroke-dasharray: 10 6;" in dashboard
+    assert ".line-close" in dashboard
+    assert "stroke: #0f8b8d;" in dashboard
 
 
 def test_render_dashboard_formats_runtime_timestamps_in_local_time(tmp_path: Path) -> None:
@@ -390,6 +398,7 @@ def test_api_status_reuses_cached_exchange_data_within_poll_window(tmp_path: Pat
     assert json.loads(second)["market_chart"]["timeframe"] == "15m"
     assert container.exchange.list_open_orders_calls == 1
     assert container.exchange.get_ohlc_calls == 1
+    assert container.exchange.last_ohlc_limit == 70
 
 
 def test_dashboard_recent_tables_are_filtered_to_configured_asset(tmp_path: Path) -> None:
