@@ -8,10 +8,13 @@ from functools import cache
 import html
 import json
 from http import HTTPStatus
+import mimetypes
 from pathlib import Path
 import re
 import tomllib
 from wsgiref.simple_server import make_server
+
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from kraken_bot.app.config import BotConfig
 from kraken_bot.app.container import Container
@@ -21,6 +24,11 @@ from kraken_bot.services.market_data_service import calculate_ema
 from kraken_bot.services.status_service import BotStatus, StatusService
 
 _RULE_DETAIL_NUMBER_PATTERN = re.compile(r"(?<![\w.])[-+]?(?:\d+\.\d{3,}|\.\d{3,}|\d+(?:\.\d+)?[eE][-+]?\d+)")
+_PACKAGE_ROOT = Path(__file__).resolve().parent
+_TEMPLATES_DIR = _PACKAGE_ROOT / "templates"
+_STATIC_DIR = _PACKAGE_ROOT / "static"
+
+
 @cache
 def _app_version() -> str:
     pyproject_path = Path(__file__).resolve().parent.parent / "pyproject.toml"
@@ -34,6 +42,16 @@ def _app_version() -> str:
         if isinstance(version, str) and version.strip():
             return version.strip()
     return "unknown"
+
+
+@cache
+def _template_environment() -> Environment:
+    return Environment(
+        loader=FileSystemLoader(str(_TEMPLATES_DIR)),
+        autoescape=select_autoescape(("html", "xml")),
+        trim_blocks=True,
+        lstrip_blocks=True,
+    )
 
 
 def _format_local_datetime(value: object) -> str:
@@ -94,139 +112,8 @@ def _local_timezone_label() -> str:
     return tzinfo.tzname(None) or str(tzinfo)
 
 
-def _render_metric(label: str, value: str, value_id: str | None = None) -> str:
-    id_attr = f" id='{html.escape(value_id)}'" if value_id else ""
-    return (
-        "<div class='card metric'>"
-        f"<div class='label'>{html.escape(label)}</div>"
-        f"<div{id_attr} class='value'>{html.escape(value)}</div>"
-        "</div>"
-    )
-
-
 def _metric_id_slug(value: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_-]", "-", value or "unknown")
-
-
-def _render_performance_cards(metrics, prefix: str) -> str:
-    cards = [
-        _render_metric("Net PnL", format(metrics.net_profit, "f"), f"metric-{prefix}net-pnl"),
-        _render_metric("Gross PnL", format(metrics.gross_profit, "f"), f"metric-{prefix}gross-pnl"),
-        _render_metric("Fees", format(metrics.fees, "f"), f"metric-{prefix}fees"),
-        _render_metric("Win Rate %", format(metrics.win_rate, "f"), f"metric-{prefix}win-rate"),
-        _render_metric("Trades", str(metrics.total_trades), f"metric-{prefix}total-trades"),
-        _render_metric("Open Trades", str(metrics.open_trades), f"metric-{prefix}open-trades"),
-        _render_metric("Closed Trades", str(metrics.closed_trades), f"metric-{prefix}closed-trades"),
-        _render_metric("Avg Hold", str(metrics.average_holding_duration), f"metric-{prefix}average-hold"),
-    ]
-    return "".join(cards)
-
-
-def _render_strategy_performance_sections(strategy_reports: dict[str, object], prefix: str, empty_label: str) -> str:
-    if not strategy_reports:
-        return f"<div class='empty'>{html.escape(empty_label)}</div>"
-    sections: list[str] = []
-    for strategy_name, metrics in strategy_reports.items():
-        safe_strategy_name = _metric_id_slug(strategy_name)
-        sections.append(
-            "<div class='strategy-performance-block'>"
-            f"<h4 class='strategy-performance-title'>{html.escape(strategy_name)}</h4>"
-            f"<div class='performance-grid compact-grid'>{_render_performance_cards(metrics, f'{prefix}{safe_strategy_name}-')}</div>"
-            "</div>"
-        )
-    return "".join(sections)
-
-
-def _render_table(headers: list[str], rows: list[list[str]], table_class: str = "") -> str:
-    head = "".join(f"<th>{html.escape(header)}</th>" for header in headers)
-    body_rows = []
-    for row in rows:
-        cells = "".join(f"<td>{html.escape(cell)}</td>" for cell in row)
-        body_rows.append(f"<tr>{cells}</tr>")
-    body = "".join(body_rows) if body_rows else "<tr><td colspan='99'>No data</td></tr>"
-    class_attr = f" class='{html.escape(table_class)}'" if table_class else ""
-    return f"<div class='table-wrap'><table{class_attr}><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>"
-
-
-def _render_detail_tags(values: list[str]) -> str:
-    tags = [value for value in values if value and value != "-"]
-    if not tags:
-        return "-"
-    return "".join(f"<span class='detail-tag'>{html.escape(value)}</span>" for value in tags)
-
-
-def _render_recent_trades_table(trades: list) -> str:
-    body_rows: list[str] = []
-    for trade in trades:
-        trade_label = f"{trade.id} · {trade.status.value}"
-        execution = f"Qty {format(trade.quantity, 'f')} · Buy {StatusService.format_decimal(trade.buy_price)} · Sell {StatusService.format_decimal(trade.sell_price)}"
-        outcome = f"Net {StatusService.format_decimal(trade.net_profit)}"
-        timing = _format_local_datetime(trade.created_at)
-        detail = _render_detail_tags([
-            f"Buy Total {_format_money_total(trade.buy_price, trade.quantity, trade.buy_fee)}",
-            f"Sell Total {_format_money_total(trade.sell_price, trade.quantity, trade.sell_fee, subtract_fee=True)}",
-            f"Fees {StatusService.format_decimal(trade.total_fees if trade.total_fees is not None else trade.buy_fee + trade.sell_fee, places=4)}",
-            f"Held {_format_duration_seconds(trade.holding_duration_seconds)}",
-            f"Regime {trade.regime.value if trade.regime else '-'}",
-            f"Strategy {trade.strategy_name or '-'}",
-            f"Buy Order {trade.buy_order_id or '-'}",
-            f"Sell Order {trade.sell_order_id or '-'}",
-        ])
-        body_rows.append(
-            "<tr class='entry-row entry-summary'>"
-            f"<td>{html.escape(trade_label)}</td>"
-            f"<td>{html.escape(execution)}</td>"
-            f"<td>{html.escape(outcome)}</td>"
-            f"<td>{html.escape(timing)}</td>"
-            "</tr>"
-            "<tr class='entry-row entry-detail'>"
-            f"<td colspan='4'>{detail}</td>"
-            "</tr>"
-        )
-    body = "".join(body_rows) if body_rows else "<tr><td colspan='4'>No data</td></tr>"
-    return (
-        "<div class='table-wrap'>"
-        "<table class='table-entry table-recent-trades'>"
-        "<thead><tr><th>Trade</th><th>Execution</th><th>Outcome</th><th>Created</th></tr></thead>"
-        f"<tbody>{body}</tbody>"
-        "</table>"
-        "</div>"
-    )
-
-
-def _render_recent_orders_table(orders: list) -> str:
-    body_rows: list[str] = []
-    for order in orders:
-        order_label = f"{order.id} · {order.type.value}"
-        execution = f"Qty {format(order.quantity, 'f')} @ {format(order.price, 'f')}"
-        state = order.status.value
-        timing = _format_local_datetime(order.time)
-        detail = _render_detail_tags([
-            f"Trade {order.trade_id or '-'}",
-            f"Notional {StatusService.format_decimal(order.price * order.quantity)}",
-            f"Exchange {order.exchange_id or '-'}",
-            f"Post Only {'yes' if order.post_only else 'no'}",
-        ])
-        body_rows.append(
-            "<tr class='entry-row entry-summary'>"
-            f"<td>{html.escape(order_label)}</td>"
-            f"<td>{html.escape(execution)}</td>"
-            f"<td>{html.escape(state)}</td>"
-            f"<td>{html.escape(timing)}</td>"
-            "</tr>"
-            "<tr class='entry-row entry-detail'>"
-            f"<td colspan='4'>{detail}</td>"
-            "</tr>"
-        )
-    body = "".join(body_rows) if body_rows else "<tr><td colspan='4'>No data</td></tr>"
-    return (
-        "<div class='table-wrap'>"
-        "<table class='table-entry table-recent-orders'>"
-        "<thead><tr><th>Order</th><th>Execution</th><th>Status</th><th>Time</th></tr></thead>"
-        f"<tbody>{body}</tbody>"
-        "</table>"
-        "</div>"
-    )
 
 
 def _format_rule_detail(detail: str) -> str:
@@ -239,22 +126,6 @@ def _format_rule_detail(detail: str) -> str:
             return raw_value
 
     return _RULE_DETAIL_NUMBER_PATTERN.sub(replace_decimal, detail)
-
-
-def _render_rule_row(label: str, state: str, detail: str) -> str:
-    state_class = {
-        "PASS": "rule-pass",
-        "FAIL": "rule-fail",
-        "INFO": "rule-info",
-        "UNKNOWN": "rule-unknown",
-    }.get(state, "rule-unknown")
-    return (
-        "<tr>"
-        f"<td>{html.escape(label)}</td>"
-        f"<td><span class='rule-pill {state_class}'>{html.escape(state)}</span></td>"
-        f"<td>{html.escape(_format_rule_detail(detail))}</td>"
-        "</tr>"
-    )
 
 
 def _strategy_snapshot(status: BotStatus) -> dict[str, object]:
@@ -473,8 +344,8 @@ def _render_market_chart(chart_payload: dict[str, object] | None) -> str:
     return (
         "<div class='chart-shell'>"
         "<div class='chart-head'>"
-        "<div><div class='eyebrow'>Live Trend View</div><h3 id='market-chart-title'>Price, candles, EMAs, and band</h3></div>"
-        f"<div class='mini-tags'>{''.join(meta)}</div>"
+        "<div><div class='eyebrow'>Live Trend View</div><h3 id='market-chart-title' class='text-lg font-semibold'>Price, candles, EMAs, and band</h3></div>"
+        f"<div class='flex flex-wrap gap-2'>{''.join(meta)}</div>"
         "</div>"
         "<div id='market-chart-frame' class='chart-frame'>"
         f"<svg id='market-chart-svg' viewBox='0 0 {width} {height}' role='img' aria-label='Market chart'>"
@@ -501,6 +372,107 @@ def _render_market_chart(chart_payload: dict[str, object] | None) -> str:
     )
 
 
+def _build_metric_data(label: str, value: str, value_id: str | None = None) -> dict[str, str | None]:
+    return {"label": label, "value": value, "id": value_id}
+
+
+def _performance_metric_data(metrics, prefix: str) -> list[dict[str, str | None]]:
+    return [
+        _build_metric_data("Net PnL", format(metrics.net_profit, "f"), f"metric-{prefix}net-pnl"),
+        _build_metric_data("Gross PnL", format(metrics.gross_profit, "f"), f"metric-{prefix}gross-pnl"),
+        _build_metric_data("Fees", format(metrics.fees, "f"), f"metric-{prefix}fees"),
+        _build_metric_data("Win Rate %", format(metrics.win_rate, "f"), f"metric-{prefix}win-rate"),
+        _build_metric_data("Trades", str(metrics.total_trades), f"metric-{prefix}total-trades"),
+        _build_metric_data("Open Trades", str(metrics.open_trades), f"metric-{prefix}open-trades"),
+        _build_metric_data("Closed Trades", str(metrics.closed_trades), f"metric-{prefix}closed-trades"),
+        _build_metric_data("Avg Hold", str(metrics.average_holding_duration), f"metric-{prefix}average-hold"),
+    ]
+
+
+def _strategy_performance_data(strategy_reports: dict[str, object], prefix: str) -> list[dict[str, object]]:
+    return [
+        {
+            "name": strategy_name,
+            "metrics": _performance_metric_data(metrics, f"{prefix}{_metric_id_slug(strategy_name)}-"),
+        }
+        for strategy_name, metrics in strategy_reports.items()
+    ]
+
+
+def _recent_trade_rows(trades: list) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for trade in trades:
+        rows.append(
+            {
+                "label": f"{trade.id} · {trade.status.value}",
+                "execution": f"Qty {format(trade.quantity, 'f')} · Buy {StatusService.format_decimal(trade.buy_price)} · Sell {StatusService.format_decimal(trade.sell_price)}",
+                "outcome": f"Net {StatusService.format_decimal(trade.net_profit)}",
+                "timing": _format_local_datetime(trade.created_at),
+                "detail_tags": [
+                    f"Buy Total {_format_money_total(trade.buy_price, trade.quantity, trade.buy_fee)}",
+                    f"Sell Total {_format_money_total(trade.sell_price, trade.quantity, trade.sell_fee, subtract_fee=True)}",
+                    f"Fees {StatusService.format_decimal(trade.total_fees if trade.total_fees is not None else trade.buy_fee + trade.sell_fee, places=4)}",
+                    f"Held {_format_duration_seconds(trade.holding_duration_seconds)}",
+                    f"Regime {trade.regime.value if trade.regime else '-'}",
+                    f"Strategy {trade.strategy_name or '-'}",
+                    f"Buy Order {trade.buy_order_id or '-'}",
+                    f"Sell Order {trade.sell_order_id or '-'}",
+                ],
+            }
+        )
+    return rows
+
+
+def _recent_order_rows(orders: list) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for order in orders:
+        rows.append(
+            {
+                "label": f"{order.id} · {order.type.value}",
+                "execution": f"Qty {format(order.quantity, 'f')} @ {format(order.price, 'f')}",
+                "state": order.status.value,
+                "timing": _format_local_datetime(order.time),
+                "detail_tags": [
+                    f"Trade {order.trade_id or '-'}",
+                    f"Notional {StatusService.format_decimal(order.price * order.quantity)}",
+                    f"Exchange {order.exchange_id or '-'}",
+                    f"Post Only {'yes' if order.post_only else 'no'}",
+                ],
+            }
+        )
+    return rows
+
+
+def _rule_rows(strategy_snapshot: dict[str, object]) -> list[dict[str, str]]:
+    state_class_map = {
+        "PASS": "rule-pass",
+        "FAIL": "rule-fail",
+        "INFO": "rule-info",
+        "UNKNOWN": "rule-unknown",
+    }
+    return [
+        {
+            "label": label,
+            "state": state,
+            "detail": _format_rule_detail(detail),
+            "state_class": state_class_map.get(state, "rule-unknown"),
+        }
+        for label, state, detail in strategy_snapshot["rules"]
+    ]
+
+
+def _open_trade_row(open_trade) -> dict[str, str] | None:
+    if not open_trade:
+        return None
+    return {
+        "id": open_trade.id,
+        "quantity": format(open_trade.quantity, "f"),
+        "buy_price": StatusService.format_decimal(open_trade.buy_price),
+        "buy_time": _format_local_datetime(open_trade.buy_time) if open_trade.buy_time else "-",
+        "status": f"{open_trade.status.value} / {open_trade.strategy_name or '-'}",
+    }
+
+
 def render_dashboard(
     status: BotStatus,
     mode: str,
@@ -509,11 +481,6 @@ def render_dashboard(
 ) -> str:
     latest_snapshot = status.latest_market_snapshot
     latest_decision = status.latest_strategy_decision
-    open_trade = status.open_trade
-    metrics = status.report_metrics
-    today_metrics = status.today_report_metrics
-    strategy_metrics = status.strategy_report_metrics
-    today_strategy_metrics = status.today_strategy_report_metrics
     cooldown_status = status.cooldown_status
     runtime = runtime or {}
     refresh_seconds = max(int(runtime.get("polling_interval_seconds") or 30), 1)
@@ -526,63 +493,71 @@ def render_dashboard(
         cooldown_label = "Active" if cooldown_status.active else "Ready"
         cooldown_left = f"{cooldown_status.minutes_remaining} min" if cooldown_status.active else "0 min"
 
-    market_cards = [
-        _render_metric("Mode", mode, "metric-mode"),
-        _render_metric("Asset", status.asset, "metric-asset"),
-        _render_metric("Bot Loop", "Running" if runtime.get("running") else "External / Off", "metric-bot-loop"),
-        _render_metric("Regime", latest_snapshot.regime.value if latest_snapshot else "-", "metric-regime"),
-        _render_metric("Strategy", latest_decision.strategy_name if latest_decision and latest_decision.strategy_name else "-", "metric-strategy"),
-        _render_metric("Snapshot Time", _format_local_datetime(latest_snapshot.time) if latest_snapshot else "-", "metric-snapshot-time"),
-        _render_metric("Price", StatusService.format_decimal(latest_snapshot.price if latest_snapshot else None), "metric-price"),
-        _render_metric("EMA Fast", StatusService.format_decimal(latest_snapshot.ema20 if latest_snapshot else None, places=2), "metric-ema-fast"),
-        _render_metric("EMA Slow", StatusService.format_decimal(latest_snapshot.ema50 if latest_snapshot else None, places=2), "metric-ema-slow"),
-        _render_metric("Band Low", StatusService.format_decimal(latest_snapshot.band_lower if latest_snapshot else None), "metric-band-low"),
-        _render_metric("Band High", StatusService.format_decimal(latest_snapshot.band_upper if latest_snapshot else None), "metric-band-high"),
-        _render_metric("Band Width %", StatusService.format_decimal(latest_snapshot.band_width_pct if latest_snapshot else None, places=2), "metric-band-width"),
-        _render_metric("Decision", latest_decision.decision.value if latest_decision else "-", "metric-decision"),
-        _render_metric("Cooldown", cooldown_label, "metric-cooldown"),
-        _render_metric("Cooldown Left", cooldown_left, "metric-cooldown-left"),
-        _render_metric("Last Sell", _format_local_datetime(cooldown_status.last_sell_time), "metric-last-sell"),
-    ]
-    runtime_cards = [
-        _render_metric("Cycles", str(runtime.get("cycle_count", 0)), "runtime-cycles"),
-        _render_metric("Polling Interval", str(runtime.get("polling_interval_seconds", "-")), "runtime-polling-interval"),
-        _render_metric("Loop Started", _format_local_datetime(runtime.get("started_at")), "runtime-started-at"),
-        _render_metric("Last Cycle", _format_local_datetime(runtime.get("last_cycle_at")), "runtime-last-cycle"),
-        _render_metric("Last Error", str(runtime.get("last_error") or "-"), "runtime-last-error"),
-    ]
-    overall_pnl_cards = _render_performance_cards(metrics, "")
-    today_pnl_cards = _render_performance_cards(today_metrics, "today-")
-    overall_strategy_sections = _render_strategy_performance_sections(
-        strategy_metrics,
-        "strategy-",
-        "No strategy-specific performance yet",
-    )
-    today_strategy_sections = _render_strategy_performance_sections(
-        today_strategy_metrics,
-        "today-strategy-",
-        "No strategy-specific performance for today",
-    )
-    open_trade_markup = (
-        _render_table(
-            ["Trade ID", "Qty", "Buy Price", "Buy Time", "Status"],
-            [[
-                open_trade.id,
-                format(open_trade.quantity, "f"),
-                StatusService.format_decimal(open_trade.buy_price),
-                _format_local_datetime(open_trade.buy_time) if open_trade.buy_time else "-",
-                f"{open_trade.status.value} / {open_trade.strategy_name or '-'}",
-            ]],
-        )
-        if open_trade
-        else "<div class='empty'>No open trade</div>"
-    )
-
-    recent_trades = _render_recent_trades_table(status.recent_trades)
-    recent_orders = _render_recent_orders_table(status.recent_orders)
-    exchange_open_orders = _render_table(
-        ["Exchange ID", "Type", "Price", "Qty", "Filled", "Status", "Opened"],
-        [
+    context = {
+        "app_version": _app_version(),
+        "generated_at": _format_local_datetime(status.generated_at),
+        "timezone_label": _local_timezone_label(),
+        "refresh_seconds": refresh_seconds,
+        "market_chart_markup": _render_market_chart(market_chart),
+        "market_metrics": [
+            _build_metric_data("Mode", mode, "metric-mode"),
+            _build_metric_data("Asset", status.asset, "metric-asset"),
+            _build_metric_data("Bot Loop", "Running" if runtime.get("running") else "External / Off", "metric-bot-loop"),
+            _build_metric_data("Regime", latest_snapshot.regime.value if latest_snapshot else "-", "metric-regime"),
+            _build_metric_data("Strategy", latest_decision.strategy_name if latest_decision and latest_decision.strategy_name else "-", "metric-strategy"),
+            _build_metric_data("Snapshot Time", _format_local_datetime(latest_snapshot.time) if latest_snapshot else "-", "metric-snapshot-time"),
+            _build_metric_data("Price", StatusService.format_decimal(latest_snapshot.price if latest_snapshot else None), "metric-price"),
+            _build_metric_data("EMA Fast", StatusService.format_decimal(latest_snapshot.ema20 if latest_snapshot else None, places=2), "metric-ema-fast"),
+            _build_metric_data("EMA Slow", StatusService.format_decimal(latest_snapshot.ema50 if latest_snapshot else None, places=2), "metric-ema-slow"),
+            _build_metric_data("Band Low", StatusService.format_decimal(latest_snapshot.band_lower if latest_snapshot else None), "metric-band-low"),
+            _build_metric_data("Band High", StatusService.format_decimal(latest_snapshot.band_upper if latest_snapshot else None), "metric-band-high"),
+            _build_metric_data("Band Width %", StatusService.format_decimal(latest_snapshot.band_width_pct if latest_snapshot else None, places=2), "metric-band-width"),
+            _build_metric_data("Decision", latest_decision.decision.value if latest_decision else "-", "metric-decision"),
+            _build_metric_data("Cooldown", cooldown_label, "metric-cooldown"),
+            _build_metric_data("Cooldown Left", cooldown_left, "metric-cooldown-left"),
+            _build_metric_data("Last Sell", _format_local_datetime(cooldown_status.last_sell_time), "metric-last-sell"),
+        ],
+        "trade_counts": ", ".join(f"{key}: {value}" for key, value in sorted(status.trade_counts.items())) or "No trades yet",
+        "regime_reason": latest_snapshot.regime_reason if latest_snapshot and latest_snapshot.regime_reason else "No regime explanation persisted yet",
+        "decision_reason": latest_decision.reason if latest_decision else "No strategy decision persisted yet",
+        "rules_title": rules_title,
+        "strategy_rules": _rule_rows(strategy_snapshot),
+        "runtime_metrics": [
+            _build_metric_data("Cycles", str(runtime.get("cycle_count", 0)), "runtime-cycles"),
+            _build_metric_data("Polling Interval", str(runtime.get("polling_interval_seconds", "-")), "runtime-polling-interval"),
+            _build_metric_data("Loop Started", _format_local_datetime(runtime.get("started_at")), "runtime-started-at"),
+            _build_metric_data("Last Cycle", _format_local_datetime(runtime.get("last_cycle_at")), "runtime-last-cycle"),
+            _build_metric_data("Last Error", str(runtime.get("last_error") or "-"), "runtime-last-error"),
+        ],
+        "performance_panels": [
+            {
+                "title": "Overall",
+                "note": "All recorded trades",
+                "root_id": "performance-grid",
+                "metrics": _performance_metric_data(status.report_metrics, ""),
+                "strategy_root_id": "performance-by-strategy-root",
+                "strategy_sections": _strategy_performance_data(status.strategy_report_metrics, "strategy-"),
+                "empty_label": "No strategy-specific performance yet",
+            },
+            {
+                "title": "Today",
+                "note": "Current local day",
+                "root_id": "performance-today-grid",
+                "metrics": _performance_metric_data(status.today_report_metrics, "today-"),
+                "strategy_root_id": "performance-today-by-strategy-root",
+                "strategy_sections": _strategy_performance_data(status.today_strategy_report_metrics, "today-strategy-"),
+                "empty_label": "No strategy-specific performance for today",
+            },
+        ],
+        "open_trade": _open_trade_row(status.open_trade),
+        "recent_orders": _recent_order_rows(status.recent_orders),
+        "exchange_open_orders_summary": (
+            f"Live Kraken open orders for {status.asset}."
+            if status.exchange_open_orders_error is None
+            else f"Kraken fetch error: {status.exchange_open_orders_error}"
+        ),
+        "exchange_open_order_headers": ["Exchange ID", "Type", "Price", "Qty", "Filled", "Status", "Opened"],
+        "exchange_open_orders": [
             [
                 order.exchange_order_id,
                 order.type.value,
@@ -594,10 +569,9 @@ def render_dashboard(
             ]
             for order in status.exchange_open_orders
         ],
-    )
-    recent_logs = _render_table(
-        ["Time", "Level", "Service", "Message", "Context"],
-        [
+        "recent_trades": _recent_trade_rows(status.recent_trades),
+        "recent_log_headers": ["Time", "Level", "Service", "Message", "Context"],
+        "recent_logs": [
             [
                 _format_local_datetime(log.time),
                 log.level,
@@ -607,1050 +581,9 @@ def render_dashboard(
             ]
             for log in status.recent_logs
         ],
-    )
+    }
 
-    decision_reason = latest_decision.reason if latest_decision else "No strategy decision persisted yet"
-    trade_counts = ", ".join(f"{key}: {value}" for key, value in sorted(status.trade_counts.items())) or "No trades yet"
-    regime_reason = latest_snapshot.regime_reason if latest_snapshot and latest_snapshot.regime_reason else "No regime explanation persisted yet"
-    timezone_label = _local_timezone_label()
-    exchange_open_orders_summary = (
-        f"Live Kraken open orders for {html.escape(status.asset)}."
-        if status.exchange_open_orders_error is None
-        else f"Kraken fetch error: {html.escape(status.exchange_open_orders_error)}"
-    )
-    app_version = _app_version()
-
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Kraken Bot Status</title>
-  <style>
-    :root {{
-      --bg: #f5f1e8;
-      --panel: #fffaf1;
-      --ink: #1b1f1e;
-      --muted: #6f756e;
-      --accent: #155e63;
-      --accent-soft: #d7eceb;
-      --border: #d9d0c2;
-      --danger: #9d3c2b;
-      --font: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
-      --mono: "SFMono-Regular", "Menlo", monospace;
-    }}
-    * {{ box-sizing: border-box; }}
-    body {{
-      margin: 0;
-      font-family: var(--font);
-      color: var(--ink);
-      background:
-        radial-gradient(circle at top left, #fff6de 0, transparent 35%),
-        linear-gradient(180deg, #f8f4ec 0%, var(--bg) 100%);
-    }}
-    .wrap {{
-      max-width: 1180px;
-      margin: 0 auto;
-      padding: 24px 16px 40px;
-    }}
-    .hero {{
-      padding: 22px;
-      border: 1px solid var(--border);
-      background: linear-gradient(135deg, var(--panel), #f2ebe0);
-      border-radius: 18px;
-      box-shadow: 0 14px 40px rgba(27, 31, 30, 0.07);
-    }}
-    h1, h2 {{ margin: 0 0 10px; }}
-    p {{
-      margin: 6px 0 0;
-      color: var(--muted);
-      line-height: 1.45;
-    }}
-    .grid {{
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-      gap: 12px;
-      margin-top: 18px;
-    }}
-    .card {{
-      background: rgba(255,255,255,0.72);
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      padding: 14px;
-    }}
-    .metric .label {{
-      color: var(--muted);
-      font-size: 0.84rem;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-    }}
-    .metric .value {{
-      margin-top: 8px;
-      font-size: 1.12rem;
-      color: var(--accent);
-      font-family: var(--mono);
-      word-break: break-word;
-    }}
-    .section {{
-      margin-top: 18px;
-      padding: 18px;
-      border-radius: 18px;
-      border: 1px solid var(--border);
-      background: var(--panel);
-    }}
-    .two-col {{
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 18px;
-    }}
-    table {{
-      width: 100%;
-      border-collapse: collapse;
-      font-family: var(--mono);
-      font-size: 0.88rem;
-    }}
-    .table-wrap {{
-      width: 100%;
-      overflow-x: auto;
-    }}
-    th, td {{
-      text-align: left;
-      padding: 10px 8px;
-      border-bottom: 1px solid var(--border);
-      vertical-align: top;
-      overflow-wrap: anywhere;
-    }}
-    th {{
-      color: var(--muted);
-      font-weight: 600;
-      white-space: nowrap;
-    }}
-    .table-entry {{
-      table-layout: fixed;
-    }}
-    .table-entry th, .table-entry td {{
-      padding: 8px 6px;
-      font-size: 0.8rem;
-    }}
-    .entry-summary td {{
-      border-bottom: 0;
-      font-weight: 600;
-    }}
-    .entry-detail td {{
-      padding-top: 0;
-      border-bottom: 1px solid var(--border);
-    }}
-    .detail-tag {{
-      display: inline-block;
-      margin: 0 8px 8px 0;
-      padding: 4px 8px;
-      border-radius: 999px;
-      background: #efe7d7;
-      color: #5d5549;
-      font-size: 0.75rem;
-      font-family: var(--mono);
-    }}
-    .tag {{
-      display: inline-block;
-      padding: 5px 9px;
-      border-radius: 999px;
-      background: var(--accent-soft);
-      color: var(--accent);
-      font-size: 0.82rem;
-    }}
-    .mini-tags {{
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      margin: 10px 0 0;
-    }}
-    .mini-tag {{
-      display: inline-block;
-      padding: 4px 8px;
-      border-radius: 999px;
-      background: #efe7d7;
-      color: #5d5549;
-      font-size: 0.76rem;
-      font-family: var(--mono);
-    }}
-    .reason {{
-      margin-top: 12px;
-      padding: 14px;
-      border-left: 4px solid var(--accent);
-      background: #f3f9f8;
-    }}
-    .empty {{
-      padding: 16px;
-      border: 1px dashed var(--border);
-      border-radius: 12px;
-      color: var(--muted);
-    }}
-    .rule-pill {{
-      display: inline-block;
-      padding: 4px 8px;
-      border-radius: 999px;
-      font-size: 0.76rem;
-      letter-spacing: 0.03em;
-      font-family: var(--mono);
-    }}
-    .rule-pass {{
-      background: #d8efe2;
-      color: #1b6b43;
-    }}
-    .rule-fail {{
-      background: #f6d7d1;
-      color: #9d3c2b;
-    }}
-    .rule-info {{
-      background: #e0edf5;
-      color: #285a7d;
-    }}
-    .rule-unknown {{
-      background: #ece7db;
-      color: #786f5f;
-    }}
-    .chart-shell {{
-      margin-top: 16px;
-      padding: 18px;
-      border-radius: 16px;
-      border: 1px solid var(--border);
-      background:
-        linear-gradient(180deg, rgba(255,255,255,0.82), rgba(243,238,228,0.96)),
-        radial-gradient(circle at top right, rgba(21, 94, 99, 0.10), transparent 38%);
-    }}
-    .chart-head {{
-      display: flex;
-      justify-content: space-between;
-      gap: 12px;
-      align-items: start;
-      flex-wrap: wrap;
-    }}
-    .eyebrow {{
-      color: var(--muted);
-      font-size: 0.74rem;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-    }}
-    .chart-frame {{
-      margin-top: 12px;
-      width: 100%;
-      overflow: hidden;
-      border-radius: 16px;
-      border: 1px solid var(--border);
-      background: linear-gradient(180deg, #fffdf8, #f5eee1);
-    }}
-    #market-chart-svg {{
-      display: block;
-      width: 100%;
-      height: auto;
-    }}
-    .chart-legend {{
-      margin-top: 12px;
-      display: flex;
-      flex-wrap: wrap;
-      gap: 12px;
-      color: var(--muted);
-      font-size: 0.88rem;
-    }}
-    .legend-item {{
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-    }}
-    .legend-swatch {{
-      width: 14px;
-      height: 14px;
-      border-radius: 3px;
-      display: inline-block;
-    }}
-    .swatch-candle {{
-      background: #1b6b43;
-    }}
-    .swatch-close {{
-      background: #0f8b8d;
-    }}
-    .swatch-ema-fast {{
-      background: #d37b32;
-    }}
-    .swatch-ema-slow {{
-      background: #7c3aed;
-      border: 1px solid #4c1d95;
-    }}
-    .swatch-band {{
-      background: rgba(66, 129, 182, 0.25);
-      border: 1px solid rgba(66, 129, 182, 0.55);
-    }}
-    .band-zone {{
-      fill: rgba(66, 129, 182, 0.15);
-      stroke: rgba(66, 129, 182, 0.45);
-      stroke-dasharray: 6 6;
-    }}
-    .price-grid {{
-      stroke: rgba(111, 117, 110, 0.22);
-      stroke-width: 1;
-      stroke-dasharray: 3 5;
-    }}
-    .line-close {{
-      fill: none;
-      stroke: #0f8b8d;
-      stroke-width: 2.4;
-      opacity: 0.92;
-    }}
-    .line-ema-fast {{
-      fill: none;
-      stroke: #d37b32;
-      stroke-width: 2.2;
-    }}
-    .line-ema-slow {{
-      fill: none;
-      stroke: #7c3aed;
-      stroke-width: 3.2;
-      stroke-dasharray: 10 6;
-      stroke-linecap: round;
-      opacity: 0.98;
-    }}
-    .candle-wick {{
-      stroke-width: 1.4;
-    }}
-    .candle-body {{
-      stroke-width: 1;
-    }}
-    .candle-up {{
-      stroke: #2e7d32;
-      fill: #2e7d32;
-    }}
-    .candle-down {{
-      stroke: #c04b32;
-      fill: #c04b32;
-    }}
-    .axis-label {{
-      fill: #6f756e;
-      font-size: 11px;
-      font-family: var(--mono);
-    }}
-    .price-label {{
-      fill: #4e554f;
-      font-size: 11px;
-      font-family: var(--mono);
-    }}
-    .footer {{
-      margin-top: 16px;
-      color: var(--muted);
-      font-size: 0.9rem;
-    }}
-    .subsection-title {{
-      margin: 0;
-      font-size: 1rem;
-      color: var(--muted);
-      letter-spacing: 0.03em;
-      text-transform: uppercase;
-    }}
-    .performance-section {{
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-      gap: 14px;
-      margin-top: 14px;
-    }}
-    .performance-panel {{
-      padding: 14px;
-      border: 1px solid var(--border);
-      border-radius: 16px;
-      background: linear-gradient(180deg, rgba(255,255,255,0.7), rgba(247,241,231,0.92));
-    }}
-    .performance-panel-header {{
-      display: flex;
-      align-items: baseline;
-      justify-content: space-between;
-      gap: 12px;
-      margin-bottom: 10px;
-      padding-bottom: 10px;
-      border-bottom: 1px solid rgba(217, 208, 194, 0.8);
-    }}
-    .performance-panel-note {{
-      color: var(--muted);
-      font-size: 0.82rem;
-      font-family: var(--mono);
-      white-space: nowrap;
-    }}
-    .performance-grid {{
-      display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 8px;
-    }}
-    .compact-grid {{
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      margin-top: 0;
-    }}
-    .performance-grid .card.metric,
-    .compact-grid .card.metric {{
-      padding: 10px 10px 9px;
-      border-radius: 12px;
-      background: rgba(255, 255, 255, 0.82);
-    }}
-    .performance-grid .metric .label,
-    .compact-grid .metric .label {{
-      font-size: 0.72rem;
-      letter-spacing: 0.05em;
-    }}
-    .performance-grid .metric .value,
-    .compact-grid .metric .value {{
-      margin-top: 5px;
-      font-size: 0.96rem;
-      line-height: 1.15;
-    }}
-    .strategy-performance-block {{
-      margin-top: 10px;
-      padding-top: 10px;
-      border-top: 1px solid var(--border);
-    }}
-    .strategy-performance-title {{
-      margin: 0 0 8px;
-      font-size: 0.9rem;
-      color: var(--ink);
-      font-family: var(--mono);
-    }}
-    @media (max-width: 760px) {{
-      .two-col {{ grid-template-columns: 1fr; }}
-      .wrap {{ padding: 16px 12px 28px; }}
-      .hero, .section {{ border-radius: 14px; }}
-      .performance-section {{ grid-template-columns: 1fr; }}
-      .performance-grid,
-      .compact-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
-      .performance-panel-header {{
-        flex-direction: column;
-        align-items: flex-start;
-      }}
-    }}
-  </style>
-</head>
-<body>
-  <div class="wrap">
-    <section class="hero">
-      <span class="tag">Generated from SQLite state</span>
-      <h1>Kraken Bot Status</h1>
-      <p>Current bot state, latest market snapshot, strategy decision, and recent trade activity.</p>
-      <div class="grid" id="market-metrics-grid">{''.join(market_cards)}</div>
-    </section>
-    <section class="section">
-      <h2>Live Market Chart</h2>
-      <p>Recent trend-timeframe candles with live EMA overlays and the currently attached range band.</p>
-      <div id="market-chart-root">{_render_market_chart(market_chart)}</div>
-    </section>
-    <section class="section">
-      <h2>Decision Context</h2>
-      <p id="trade-counts">Trade counts: {html.escape(trade_counts)}</p>
-      <div class="reason" id="regime-reason"><strong>Regime Reason:</strong> {html.escape(regime_reason)}</div>
-      <div class="reason" id="decision-reason"><strong>Decision Reason:</strong> {html.escape(decision_reason)}</div>
-    </section>
-    <section class="section">
-      <h2 id="strategy-rules-title">{html.escape(rules_title)}</h2>
-      <p>Rule-by-rule view of the latest strategy evaluation based on persisted snapshot and portfolio state.</p>
-      <table>
-        <thead>
-          <tr>
-            <th>Rule</th>
-            <th>State</th>
-            <th>Detail</th>
-          </tr>
-        </thead>
-        <tbody id="rules-table-body">
-          {''.join(_render_rule_row(label, state, detail) for label, state, detail in strategy_snapshot["rules"])}
-        </tbody>
-      </table>
-    </section>
-    <section class="section">
-      <h2>Runtime</h2>
-      <div class="grid" id="runtime-grid">{''.join(runtime_cards)}</div>
-    </section>
-    <section class="section">
-      <h2>Performance</h2>
-      <div class="performance-section">
-        <div class="performance-panel">
-          <div class="performance-panel-header">
-            <h3 class="subsection-title">Overall</h3>
-            <span class="performance-panel-note">All recorded trades</span>
-          </div>
-          <div class="performance-grid" id="performance-grid">{overall_pnl_cards}</div>
-          <div id="performance-by-strategy-root">{overall_strategy_sections}</div>
-        </div>
-        <div class="performance-panel">
-          <div class="performance-panel-header">
-            <h3 class="subsection-title">Today</h3>
-            <span class="performance-panel-note">Current local day</span>
-          </div>
-          <div class="performance-grid" id="performance-today-grid">{today_pnl_cards}</div>
-          <div id="performance-today-by-strategy-root">{today_strategy_sections}</div>
-        </div>
-      </div>
-    </section>
-    <section class="section">
-      <h2>Open Trade</h2>
-      <div id="open-trade-root">{open_trade_markup}</div>
-    </section>
-    <section class="section">
-      <h2>Recent Orders</h2>
-      <div id="recent-orders-root">{recent_orders}</div>
-    </section>
-    <section class="section">
-      <h2>Kraken Open Orders</h2>
-      <p id="exchange-open-orders-summary">{exchange_open_orders_summary}</p>
-      <div id="exchange-open-orders-root">{exchange_open_orders}</div>
-    </section>
-    <section class="section">
-      <h2>Recent Trades</h2>
-      <div id="recent-trades-root">{recent_trades}</div>
-    </section>
-    <section class="section">
-      <h2>Recent Logs</h2>
-      <div id="recent-logs-root">{recent_logs}</div>
-      <div class="footer" id="dashboard-footer">
-        <span id="dashboard-refresh-meta">Refreshed at {html.escape(_format_local_datetime(status.generated_at))} · Timezone: {html.escape(timezone_label)}</span>
-        <span> · App Version: <span id="dashboard-app-version">{html.escape(app_version)}</span></span>
-      </div>
-    </section>
-  </div>
-  <script>
-    const statusEndpoint = "/api/status";
-
-    function escapeHtml(value) {{
-      return String(value ?? "")
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;")
-        .replaceAll('"', "&quot;")
-        .replaceAll("'", "&#39;");
-    }}
-
-    function numberOrNull(value) {{
-      if (value === null || value === undefined || value === "") return null;
-      const parsed = Number(value);
-      return Number.isFinite(parsed) ? parsed : null;
-    }}
-
-    function setText(id, value) {{
-      const element = document.getElementById(id);
-      if (!element) return;
-      element.textContent = value ?? "-";
-    }}
-
-    function formatLocalDateTime(value) {{
-      if (value === null || value === undefined || value === "") return "-";
-      const date = new Date(value);
-      if (Number.isNaN(date.getTime())) return String(value);
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, "0");
-      const day = String(date.getDate()).padStart(2, "0");
-      const hours = String(date.getHours()).padStart(2, "0");
-      const minutes = String(date.getMinutes()).padStart(2, "0");
-      const seconds = String(date.getSeconds()).padStart(2, "0");
-      return `${{year}}-${{month}}-${{day}} ${{hours}}:${{minutes}}:${{seconds}}`;
-    }}
-
-    function formatLocalDateTimeShort(value) {{
-      const formatted = formatLocalDateTime(value);
-      return formatted === "-" ? formatted : formatted.slice(0, 16);
-    }}
-
-    function formatDurationSeconds(value) {{
-      if (value === null || value === undefined || value === "") return "-";
-      const totalSeconds = Number(value);
-      if (!Number.isFinite(totalSeconds)) return String(value);
-      const normalized = Math.max(0, Math.trunc(totalSeconds));
-      const hours = Math.floor(normalized / 3600);
-      const remainder = normalized % 3600;
-      const minutes = Math.floor(remainder / 60);
-      const seconds = remainder % 60;
-      if (hours > 0) return `${{hours}}h ${{String(minutes).padStart(2, "0")}}m ${{String(seconds).padStart(2, "0")}}s`;
-      if (minutes > 0) return `${{minutes}}m ${{String(seconds).padStart(2, "0")}}s`;
-      return `${{seconds}}s`;
-    }}
-
-    function formatDecimal(value, places = null) {{
-      if (value === null || value === undefined || value === "") return "-";
-      const parsed = Number(value);
-      if (!Number.isFinite(parsed)) return String(value);
-      return places === null ? parsed.toString() : parsed.toFixed(places);
-    }}
-
-    function formatMoneyTotal(price, quantity, fee = null, subtractFee = false) {{
-      const priceValue = numberOrNull(price);
-      const quantityValue = numberOrNull(quantity);
-      if (priceValue === null || quantityValue === null) return "-";
-      let total = priceValue * quantityValue;
-      const feeValue = numberOrNull(fee);
-      if (feeValue !== null) total = subtractFee ? total - feeValue : total + feeValue;
-      return formatDecimal(total, 4);
-    }}
-
-    function formatRuleDetail(detail) {{
-      return String(detail ?? "").replace(
-        /(^|[^\\w.])([-+]?(?:\\d+\\.\\d{{3,}}|\\.\\d{{3,}}|\\d+(?:\\.\\d+)?[eE][-+]?\\d+))/g,
-        (_fullMatch, prefix, numericPart) => {{
-          const parsed = Number(numericPart);
-          if (!Number.isFinite(parsed)) return `${{prefix}}${{numericPart}}`;
-          return `${{prefix}}${{parsed.toFixed(2)}}`;
-        }}
-      );
-    }}
-
-    function renderTable(headers, rows, tableClass = "") {{
-      const head = headers.map((header) => `<th>${{escapeHtml(header)}}</th>`).join("");
-      const bodyRows = rows.map((row) => {{
-        const cells = row.map((cell) => `<td>${{escapeHtml(cell)}}</td>`).join("");
-        return `<tr>${{cells}}</tr>`;
-      }}).join("");
-      const body = bodyRows || "<tr><td colspan='99'>No data</td></tr>";
-      const classAttr = tableClass ? ` class="${{escapeHtml(tableClass)}}"` : "";
-      return `<div class="table-wrap"><table${{classAttr}}><thead><tr>${{head}}</tr></thead><tbody>${{body}}</tbody></table></div>`;
-    }}
-
-    function renderDetailTags(values) {{
-      const tags = values
-        .filter((value) => value !== null && value !== undefined && value !== "" && value !== "-")
-        .map((value) => `<span class="detail-tag">${{escapeHtml(String(value))}}</span>`);
-      return tags.join("") || "-";
-    }}
-
-    function renderRules(strategyRules) {{
-      const title = document.getElementById("strategy-rules-title");
-      const body = document.getElementById("rules-table-body");
-      if (!body || !strategyRules) return;
-      if (title) {{
-        title.textContent = strategyRules.context === "sell" ? "SELL Rules" : "BUY Rules";
-      }}
-      const rules = Array.isArray(strategyRules.rules) ? strategyRules.rules : [];
-      body.innerHTML = rules.map((rule) => {{
-        const [label, state, detail] = Array.isArray(rule) ? rule : ["Rule", "UNKNOWN", ""];
-        let stateClass = "rule-unknown";
-        if (state === "PASS") stateClass = "rule-pass";
-        else if (state === "FAIL") stateClass = "rule-fail";
-        else if (state === "INFO") stateClass = "rule-info";
-        return `
-          <tr>
-            <td>${{escapeHtml(label)}}</td>
-            <td><span class="rule-pill ${{stateClass}}">${{escapeHtml(state)}}</span></td>
-            <td>${{escapeHtml(formatRuleDetail(detail))}}</td>
-          </tr>
-        `;
-      }}).join("") || '<tr><td colspan="3">No data</td></tr>';
-    }}
-
-    function renderPerformance(prefix, reportMetrics) {{
-      const idPrefix = prefix ? `${{prefix}}-` : "";
-      setText(`metric-${{idPrefix}}net-pnl`, formatDecimal(reportMetrics?.net_profit));
-      setText(`metric-${{idPrefix}}gross-pnl`, formatDecimal(reportMetrics?.gross_profit));
-      setText(`metric-${{idPrefix}}fees`, formatDecimal(reportMetrics?.fees));
-      setText(`metric-${{idPrefix}}win-rate`, formatDecimal(reportMetrics?.win_rate));
-      setText(`metric-${{idPrefix}}total-trades`, String(reportMetrics?.total_trades ?? 0));
-      setText(`metric-${{idPrefix}}open-trades`, String(reportMetrics?.open_trades ?? 0));
-      setText(`metric-${{idPrefix}}closed-trades`, String(reportMetrics?.closed_trades ?? 0));
-      setText(`metric-${{idPrefix}}average-hold`, String(reportMetrics?.average_holding_duration ?? "-"));
-    }}
-
-    function escapeStrategyMetricPrefix(value) {{
-      return String(value || "unknown").replaceAll(/[^a-zA-Z0-9_-]/g, "-");
-    }}
-
-    function renderStrategyPerformance(containerId, strategyReports, prefix, emptyLabel) {{
-      const root = document.getElementById(containerId);
-      if (!root) return;
-      const entries = Object.entries(strategyReports || {{}});
-      if (!entries.length) {{
-        root.innerHTML = `<div class="empty">${{escapeHtml(emptyLabel)}}</div>`;
-        return;
-      }}
-      root.innerHTML = entries.map(([strategyName]) => {{
-        const safePrefix = `${{prefix}}${{escapeStrategyMetricPrefix(strategyName)}}-`;
-        return `
-          <div class="strategy-performance-block">
-            <h4 class="strategy-performance-title">${{escapeHtml(strategyName)}}</h4>
-            <div class="grid">
-              ${{
-                renderMetricCard("Net PnL", `metric-${{safePrefix}}net-pnl`) +
-                renderMetricCard("Gross PnL", `metric-${{safePrefix}}gross-pnl`) +
-                renderMetricCard("Fees", `metric-${{safePrefix}}fees`) +
-                renderMetricCard("Win Rate %", `metric-${{safePrefix}}win-rate`) +
-                renderMetricCard("Trades", `metric-${{safePrefix}}total-trades`) +
-                renderMetricCard("Open Trades", `metric-${{safePrefix}}open-trades`) +
-                renderMetricCard("Closed Trades", `metric-${{safePrefix}}closed-trades`) +
-                renderMetricCard("Avg Hold", `metric-${{safePrefix}}average-hold`)
-              }}
-            </div>
-          </div>
-        `;
-      }}).join("");
-      for (const [strategyName, metrics] of entries) {{
-        renderPerformance(`${{prefix}}${{escapeStrategyMetricPrefix(strategyName)}}`, metrics);
-      }}
-    }}
-
-    function renderMetricCard(label, valueId) {{
-      return `
-        <div class="card metric">
-          <div class="label">${{escapeHtml(label)}}</div>
-          <div id="${{escapeHtml(valueId)}}" class="value">-</div>
-        </div>
-      `;
-    }}
-
-    function renderOpenTrade(openTrade) {{
-      const root = document.getElementById("open-trade-root");
-      if (!root) return;
-      if (!openTrade) {{
-        root.innerHTML = "<div class='empty'>No open trade</div>";
-        return;
-      }}
-      root.innerHTML = renderTable(
-        ["Trade ID", "Qty", "Buy Price", "Buy Time", "Status"],
-        [[
-          String(openTrade.id || "-"),
-          formatDecimal(openTrade.quantity),
-          formatDecimal(openTrade.buy_price),
-          formatLocalDateTime(openTrade.buy_time),
-          `${{String(openTrade.status || "-")}} / ${{String(openTrade.strategy_name || "-")}}`,
-        ]]
-      );
-    }}
-
-    function renderRecentOrders(orders) {{
-      const root = document.getElementById("recent-orders-root");
-      if (!root) return;
-      const entries = (Array.isArray(orders) ? orders : []).map((order) => {{
-        const detail = renderDetailTags([
-          `Trade ${{String(order.trade_id || "-")}}`,
-          `Notional ${{formatMoneyTotal(order.price, order.quantity)}}`,
-          `Exchange ${{String(order.exchange_id || "-")}}`,
-          `Post Only ${{order.post_only ? "yes" : "no"}}`,
-        ]);
-        return `
-          <tr class="entry-row entry-summary">
-            <td>${{escapeHtml(`${{String(order.id || "-")}} · ${{String(order.type || "-")}}`)}}</td>
-            <td>${{escapeHtml(`Qty ${{formatDecimal(order.quantity)}} @ ${{formatDecimal(order.price)}}`)}}</td>
-            <td>${{escapeHtml(String(order.status || "-"))}}</td>
-            <td>${{escapeHtml(formatLocalDateTime(order.time))}}</td>
-          </tr>
-          <tr class="entry-row entry-detail">
-            <td colspan="4">${{detail}}</td>
-          </tr>
-        `;
-      }}).join("") || "<tr><td colspan='4'>No data</td></tr>";
-      root.innerHTML = `
-        <div class="table-wrap">
-          <table class="table-entry table-recent-orders">
-            <thead><tr><th>Order</th><th>Execution</th><th>Status</th><th>Time</th></tr></thead>
-            <tbody>${{entries}}</tbody>
-          </table>
-        </div>
-      `;
-    }}
-
-    function renderExchangeOpenOrders(asset, orders, error) {{
-      const summary = document.getElementById("exchange-open-orders-summary");
-      if (summary) {{
-        summary.textContent = error ? `Kraken fetch error: ${{error}}` : `Live Kraken open orders for ${{asset || "-"}}.`;
-      }}
-      const root = document.getElementById("exchange-open-orders-root");
-      if (!root) return;
-      const rows = (Array.isArray(orders) ? orders : []).map((order) => [
-        String(order.exchange_order_id || "-"),
-        String(order.type || "-"),
-        formatDecimal(order.price),
-        formatDecimal(order.quantity),
-        formatDecimal(order.filled_quantity),
-        String(order.status || "-"),
-        formatLocalDateTime(order.opened_at),
-      ]);
-      root.innerHTML = renderTable(
-        ["Exchange ID", "Type", "Price", "Qty", "Filled", "Status", "Opened"],
-        rows
-      );
-    }}
-
-    function renderRecentTrades(trades) {{
-      const root = document.getElementById("recent-trades-root");
-      if (!root) return;
-      const entries = (Array.isArray(trades) ? trades : []).map((trade) => {{
-        const detail = renderDetailTags([
-          `Buy Total ${{formatMoneyTotal(trade.buy_price, trade.quantity, trade.buy_fee, false)}}`,
-          `Sell Total ${{formatMoneyTotal(trade.sell_price, trade.quantity, trade.sell_fee, true)}}`,
-          `Fees ${{formatDecimal(trade.total_fees ?? ((numberOrNull(trade.buy_fee) ?? 0) + (numberOrNull(trade.sell_fee) ?? 0)), 4)}}`,
-          `Held ${{formatDurationSeconds(trade.holding_duration_seconds)}}`,
-          `Regime ${{String(trade.regime || "-")}}`,
-          `Strategy ${{String(trade.strategy_name || "-")}}`,
-          `Buy Order ${{String(trade.buy_order_id || "-")}}`,
-          `Sell Order ${{String(trade.sell_order_id || "-")}}`,
-        ]);
-        return `
-          <tr class="entry-row entry-summary">
-            <td>${{escapeHtml(`${{String(trade.id || "-")}} · ${{String(trade.status || "-")}}`)}}</td>
-            <td>${{escapeHtml(`Qty ${{formatDecimal(trade.quantity)}} · Buy ${{formatDecimal(trade.buy_price)}} · Sell ${{formatDecimal(trade.sell_price)}}`)}}</td>
-            <td>${{escapeHtml(`Net ${{formatDecimal(trade.net_profit)}}`)}}</td>
-            <td>${{escapeHtml(formatLocalDateTime(trade.created_at))}}</td>
-          </tr>
-          <tr class="entry-row entry-detail">
-            <td colspan="4">${{detail}}</td>
-          </tr>
-        `;
-      }}).join("") || "<tr><td colspan='4'>No data</td></tr>";
-      root.innerHTML = `
-        <div class="table-wrap">
-          <table class="table-entry table-recent-trades">
-            <thead><tr><th>Trade</th><th>Execution</th><th>Outcome</th><th>Created</th></tr></thead>
-            <tbody>${{entries}}</tbody>
-          </table>
-        </div>
-      `;
-    }}
-
-    function renderRecentLogs(logs) {{
-      const root = document.getElementById("recent-logs-root");
-      if (!root) return;
-      const rows = (Array.isArray(logs) ? logs : []).map((log) => [
-        formatLocalDateTime(log.time),
-        String(log.level || "-"),
-        String(log.service || "-"),
-        String(log.message || "-"),
-        String(log.context_json || "-"),
-      ]);
-      root.innerHTML = renderTable(
-        ["Time", "Level", "Service", "Message", "Context"],
-        rows
-      );
-    }}
-
-    function refreshStatusFields(payload) {{
-      const snapshot = payload.latest_market_snapshot || null;
-      const decision = payload.latest_strategy_decision || null;
-      const cooldown = payload.cooldown_status || null;
-      const runtime = payload.runtime || {{}};
-
-      setText("metric-mode", payload.mode || "-");
-      setText("metric-asset", payload.asset || "-");
-      setText("metric-bot-loop", runtime.running ? "Running" : "External / Off");
-      setText("metric-regime", snapshot?.regime || "-");
-      setText("metric-strategy", decision?.strategy_name || "-");
-      setText("metric-snapshot-time", snapshot ? formatLocalDateTime(snapshot.time) : "-");
-      setText("metric-price", formatDecimal(snapshot?.price));
-      setText("metric-ema-fast", formatDecimal(snapshot?.ema20, 2));
-      setText("metric-ema-slow", formatDecimal(snapshot?.ema50, 2));
-      setText("metric-band-low", formatDecimal(snapshot?.band_lower));
-      setText("metric-band-high", formatDecimal(snapshot?.band_upper));
-      setText("metric-band-width", formatDecimal(snapshot?.band_width_pct, 2));
-      setText("metric-decision", decision?.decision || "-");
-      setText(
-        "metric-cooldown",
-        (cooldown?.configured_minutes ?? 0) > 0 ? (cooldown?.active ? "Active" : "Ready") : "Disabled"
-      );
-      setText(
-        "metric-cooldown-left",
-        (cooldown?.configured_minutes ?? 0) > 0 ? `${{cooldown?.minutes_remaining ?? 0}} min` : "-"
-      );
-      setText("metric-last-sell", formatLocalDateTime(cooldown?.last_sell_time));
-
-      setText("runtime-cycles", String(runtime.cycle_count ?? 0));
-      setText("runtime-polling-interval", String(runtime.polling_interval_seconds ?? "-"));
-      setText("runtime-started-at", formatLocalDateTime(runtime.started_at));
-      setText("runtime-last-cycle", formatLocalDateTime(runtime.last_cycle_at));
-      setText("runtime-last-error", runtime.last_error || "-");
-
-      setText("trade-counts", `Trade counts: ${{
-        Object.entries(payload.trade_counts || {{}})
-          .sort(([a], [b]) => a.localeCompare(b))
-          .map(([key, value]) => `${{key}}: ${{value}}`)
-          .join(", ") || "No trades yet"
-      }}`);
-
-      const regimeReason = document.getElementById("regime-reason");
-      if (regimeReason) regimeReason.innerHTML = `<strong>Regime Reason:</strong> ${{escapeHtml(snapshot?.regime_reason || "No regime explanation persisted yet")}}`;
-      const decisionReason = document.getElementById("decision-reason");
-      if (decisionReason) decisionReason.innerHTML = `<strong>Decision Reason:</strong> ${{escapeHtml(decision?.reason || "No strategy decision persisted yet")}}`;
-
-      const footerMeta = document.getElementById("dashboard-refresh-meta");
-      if (footerMeta) {{
-        const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "local time";
-        footerMeta.textContent = `Refreshed at ${{formatLocalDateTime(payload.generated_at)}} · Timezone: ${{timezone}}`;
-      }}
-
-      setText("dashboard-app-version", payload.app_version || "unknown");
-
-      renderPerformance("", payload.report_metrics || null);
-      renderPerformance("today", payload.today_report_metrics || null);
-      renderStrategyPerformance(
-        "performance-by-strategy-root",
-        payload.strategy_report_metrics || {{}},
-        "strategy-",
-        "No strategy-specific performance yet"
-      );
-      renderStrategyPerformance(
-        "performance-today-by-strategy-root",
-        payload.today_strategy_report_metrics || {{}},
-        "today-strategy-",
-        "No strategy-specific performance for today"
-      );
-      renderOpenTrade(payload.open_trade || null);
-      renderRecentOrders(payload.recent_orders || []);
-      renderExchangeOpenOrders(payload.asset || "-", payload.exchange_open_orders || [], payload.exchange_open_orders_error || null);
-      renderRecentTrades(payload.recent_trades || []);
-      renderRecentLogs(payload.recent_logs || []);
-      renderRules(payload.strategy_rules);
-    }}
-
-    function renderMarketChart(chart) {{
-      const root = document.getElementById("market-chart-root");
-      if (!root || !chart) return;
-      if (chart.error) {{
-        root.innerHTML = `<div class="empty">Chart unavailable: ${{escapeHtml(chart.error)}}</div>`;
-        return;
-      }}
-      const points = Array.isArray(chart.points) ? chart.points : [];
-      if (!points.length) {{
-        root.innerHTML = '<div class="empty">No chart data available</div>';
-        return;
-      }}
-
-      const normalized = points.map((point) => ({{
-        time: String(point.time || ""),
-        open: numberOrNull(point.open),
-        high: numberOrNull(point.high),
-        low: numberOrNull(point.low),
-        close: numberOrNull(point.close),
-        ema_fast: numberOrNull(point.ema_fast),
-        ema_slow: numberOrNull(point.ema_slow),
-      }})).filter((point) =>
-        point.open !== null && point.high !== null && point.low !== null && point.close !== null
-      );
-
-      if (!normalized.length) {{
-        root.innerHTML = '<div class="empty">No chart data available</div>';
-        return;
-      }}
-
-      const width = 960;
-      const height = 320;
-      const left = 18;
-      const right = 18;
-      const top = 16;
-      const bottom = 34;
-      const innerWidth = width - left - right;
-      const innerHeight = height - top - bottom;
-      const bandLower = numberOrNull(chart.band_lower);
-      const bandUpper = numberOrNull(chart.band_upper);
-      const values = normalized.flatMap((point) => [point.high, point.low]);
-      if (bandLower !== null) values.push(bandLower);
-      if (bandUpper !== null) values.push(bandUpper);
-      let highBound = Math.max(...values);
-      let lowBound = Math.min(...values);
-      if (highBound === lowBound) {{
-        highBound += 1;
-        lowBound -= 1;
-      }}
-      const padding = (highBound - lowBound) * 0.08;
-      highBound += padding;
-      lowBound -= padding;
-      const valueRange = highBound - lowBound;
-      const priceTicks = Array.from({{ length: 5 }}, (_, step) => {{
-        const ratio = step / 4;
-        const value = highBound - (valueRange * ratio);
-        return {{ value, y: top + innerHeight - (((value - lowBound) / valueRange) * innerHeight) }};
-      }});
-
-      const xPos = (index) => normalized.length === 1
-        ? left + innerWidth / 2
-        : left + (innerWidth * index / (normalized.length - 1));
-      const yPos = (value) => top + innerHeight - (((value - lowBound) / valueRange) * innerHeight);
-      const pathFor = (key) => normalized
-        .map((point, index) => point[key] === null ? null : `${{index === 0 || normalized.slice(0, index).every((entry) => entry[key] === null) ? "M" : "L"}}${{xPos(index).toFixed(2)}},${{yPos(point[key]).toFixed(2)}}`)
-        .filter(Boolean)
-        .join(" ");
-
-      const bodyWidth = Math.max(4, Math.min(16, innerWidth / Math.max(normalized.length * 1.8, 2)));
-      const candles = normalized.map((point, index) => {{
-        const x = xPos(index);
-        const openY = yPos(point.open);
-        const closeY = yPos(point.close);
-        const highY = yPos(point.high);
-        const lowY = yPos(point.low);
-        const bodyTop = Math.min(openY, closeY);
-        const bodyHeight = Math.max(Math.abs(openY - closeY), 1.5);
-        const candleClass = point.close >= point.open ? "candle-up" : "candle-down";
-        return `
-          <line class="candle-wick ${{candleClass}}" x1="${{x.toFixed(2)}}" y1="${{highY.toFixed(2)}}" x2="${{x.toFixed(2)}}" y2="${{lowY.toFixed(2)}}" />
-          <rect class="candle-body ${{candleClass}}" x="${{(x - bodyWidth / 2).toFixed(2)}}" y="${{bodyTop.toFixed(2)}}" width="${{bodyWidth.toFixed(2)}}" height="${{bodyHeight.toFixed(2)}}" rx="1.5" />
-        `;
-      }}).join("");
-
-      let bandMarkup = "";
-      if (bandLower !== null && bandUpper !== null) {{
-        const bandTop = yPos(Math.max(bandLower, bandUpper));
-        const bandBottom = yPos(Math.min(bandLower, bandUpper));
-        bandMarkup = `<rect class="band-zone" x="${{left}}" y="${{bandTop.toFixed(2)}}" width="${{innerWidth.toFixed(2)}}" height="${{Math.max(1, bandBottom - bandTop).toFixed(2)}}" rx="8" />`;
-      }}
-
-      const priceGrid = priceTicks.map((tick) =>
-        `<line class="price-grid" x1="${{left.toFixed(2)}}" y1="${{tick.y.toFixed(2)}}" x2="${{(width - right).toFixed(2)}}" y2="${{tick.y.toFixed(2)}}" />`
-      ).join("");
-      const priceLabels = priceTicks.map((tick) =>
-        `<text class="price-label" x="${{(width - right - 4).toFixed(2)}}" y="${{(tick.y - 4).toFixed(2)}}" text-anchor="end">${{escapeHtml(tick.value.toFixed(2))}}</text>`
-      ).join("");
-
-      const firstLabel = escapeHtml(formatLocalDateTimeShort(normalized[0].time));
-      const midLabel = escapeHtml(formatLocalDateTimeShort(normalized[Math.floor(normalized.length / 2)].time));
-      const lastLabel = escapeHtml(formatLocalDateTimeShort(normalized[normalized.length - 1].time));
-      const meta = [
-        `<span class="mini-tag">Trend TF: ${{escapeHtml(chart.timeframe || "-")}}</span>`,
-        `<span class="mini-tag">Candles: ${{normalized.length}}</span>`,
-      ];
-      if (chart.band_width_pct !== null && chart.band_width_pct !== undefined && chart.band_width_pct !== "") {{
-        meta.push(`<span class="mini-tag">Band Width: ${{escapeHtml(Number(chart.band_width_pct).toFixed(2))}}%</span>`);
-      }}
-
-      root.innerHTML = `
-        <div class="chart-shell">
-          <div class="chart-head">
-            <div><div class="eyebrow">Live Trend View</div><h3 id="market-chart-title">Price, candles, EMAs, and band</h3></div>
-            <div class="mini-tags">${{meta.join("")}}</div>
-          </div>
-          <div id="market-chart-frame" class="chart-frame">
-            <svg id="market-chart-svg" viewBox="0 0 ${{width}} ${{height}}" role="img" aria-label="Market chart">
-              ${{priceGrid}}
-              ${{bandMarkup}}
-              <path class="line-close" d="${{pathFor("close")}}" />
-              <path class="line-ema-fast" d="${{pathFor("ema_fast")}}" />
-              <path class="line-ema-slow" d="${{pathFor("ema_slow")}}" />
-              ${{candles}}
-              ${{priceLabels}}
-              <text class="axis-label" x="${{left}}" y="${{height - 10}}">${{firstLabel}}</text>
-              <text class="axis-label" x="${{(width / 2).toFixed(2)}}" y="${{height - 10}}" text-anchor="middle">${{midLabel}}</text>
-              <text class="axis-label" x="${{width - right}}" y="${{height - 10}}" text-anchor="end">${{lastLabel}}</text>
-            </svg>
-          </div>
-          <div class="chart-legend">
-            <span class="legend-item"><span class="legend-swatch swatch-candle"></span>Candles</span>
-            <span class="legend-item"><span class="legend-swatch swatch-close"></span>Close</span>
-            <span class="legend-item"><span class="legend-swatch swatch-ema-fast"></span>EMA Fast</span>
-            <span class="legend-item"><span class="legend-swatch swatch-ema-slow"></span>EMA Slow</span>
-            <span class="legend-item"><span class="legend-swatch swatch-band"></span>Band</span>
-          </div>
-        </div>
-      `;
-    }}
-
-    async function refreshDashboardVisuals() {{
-      try {{
-        const response = await fetch(statusEndpoint, {{ headers: {{ "Accept": "application/json" }} }});
-        if (!response.ok) return;
-        const payload = await response.json();
-        refreshStatusFields(payload);
-        renderMarketChart(payload.market_chart);
-      }} catch (_error) {{
-      }}
-    }}
-
-    refreshDashboardVisuals();
-    window.setInterval(refreshDashboardVisuals, {refresh_seconds * 1000});
-  </script>
-</body>
-</html>"""
+    return _template_environment().get_template("dashboard.html").render(**context)
 
 
 def build_app(container: Container, loop_controller: BotLoopController | None = None):
@@ -1686,8 +619,41 @@ def build_app(container: Container, loop_controller: BotLoopController | None = 
             exchange_cache.get("market_chart"),
         )
 
+    def serve_static(path: str, start_response):
+        relative_path = path.removeprefix("/static/")
+        target = (_STATIC_DIR / relative_path).resolve()
+        try:
+            target.relative_to(_STATIC_DIR)
+        except ValueError:
+            body = b"Not found"
+            start_response(
+                f"{HTTPStatus.NOT_FOUND.value} {HTTPStatus.NOT_FOUND.phrase}",
+                [("Content-Type", "text/plain; charset=utf-8"), ("Content-Length", str(len(body)))],
+            )
+            return [body]
+        if not target.is_file():
+            body = b"Not found"
+            start_response(
+                f"{HTTPStatus.NOT_FOUND.value} {HTTPStatus.NOT_FOUND.phrase}",
+                [("Content-Type", "text/plain; charset=utf-8"), ("Content-Length", str(len(body)))],
+            )
+            return [body]
+        body = target.read_bytes()
+        content_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+        if content_type.startswith("text/") or content_type in {"application/javascript", "application/json"}:
+            content_type = f"{content_type}; charset=utf-8"
+        start_response(
+            f"{HTTPStatus.OK.value} {HTTPStatus.OK.phrase}",
+            [("Content-Type", content_type), ("Content-Length", str(len(body)))],
+        )
+        return [body]
+
     def app(environ, start_response):
         path = environ.get("PATH_INFO", "/")
+
+        if path.startswith("/static/"):
+            return serve_static(path, start_response)
+
         asset = container.config.bot.asset
         exchange_open_orders, exchange_open_orders_error, market_chart = cached_exchange_payload(asset)
         status = status_service.get_status(
