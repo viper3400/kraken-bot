@@ -81,7 +81,7 @@ def _format_money_total(price: Decimal | None, quantity: Decimal, fee: Decimal |
     total = price * quantity
     if fee is not None:
         total = total - fee if subtract_fee else total + fee
-    return StatusService.format_decimal(total)
+    return StatusService.format_decimal(total, places=4)
 
 
 def _local_timezone_label() -> str:
@@ -132,7 +132,7 @@ def _render_recent_trades_table(trades: list) -> str:
         detail = _render_detail_tags([
             f"Buy Total {_format_money_total(trade.buy_price, trade.quantity, trade.buy_fee)}",
             f"Sell Total {_format_money_total(trade.sell_price, trade.quantity, trade.sell_fee, subtract_fee=True)}",
-            f"Fees {StatusService.format_decimal(trade.total_fees if trade.total_fees is not None else trade.buy_fee + trade.sell_fee)}",
+            f"Fees {StatusService.format_decimal(trade.total_fees if trade.total_fees is not None else trade.buy_fee + trade.sell_fee, places=4)}",
             f"Held {_format_duration_seconds(trade.holding_duration_seconds)}",
             f"Regime {trade.regime.value if trade.regime else '-'}",
             f"Strategy {trade.strategy_name or '-'}",
@@ -1046,7 +1046,7 @@ def render_dashboard(
       let total = priceValue * quantityValue;
       const feeValue = numberOrNull(fee);
       if (feeValue !== null) total = subtractFee ? total - feeValue : total + feeValue;
-      return formatDecimal(total);
+      return formatDecimal(total, 4);
     }}
 
     function formatRuleDetail(detail) {{
@@ -1193,7 +1193,7 @@ def render_dashboard(
         const detail = renderDetailTags([
           `Buy Total ${{formatMoneyTotal(trade.buy_price, trade.quantity, trade.buy_fee, false)}}`,
           `Sell Total ${{formatMoneyTotal(trade.sell_price, trade.quantity, trade.sell_fee, true)}}`,
-          `Fees ${{formatDecimal(trade.total_fees ?? ((numberOrNull(trade.buy_fee) ?? 0) + (numberOrNull(trade.sell_fee) ?? 0)))}}`,
+          `Fees ${{formatDecimal(trade.total_fees ?? ((numberOrNull(trade.buy_fee) ?? 0) + (numberOrNull(trade.sell_fee) ?? 0)), 4)}}`,
           `Held ${{formatDurationSeconds(trade.holding_duration_seconds)}}`,
           `Regime ${{String(trade.regime || "-")}}`,
           `Strategy ${{String(trade.strategy_name || "-")}}`,
