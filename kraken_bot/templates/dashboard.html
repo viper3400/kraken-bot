@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kraken Bot Status</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body
+  class="min-h-screen bg-stone-950 text-stone-100"
+  data-refresh-seconds="{{ refresh_seconds }}"
+  data-status-endpoint="/api/status"
+>
+  <div class="bg-[radial-gradient(circle_at_top_left,_rgba(34,211,238,0.16),_transparent_30%),linear-gradient(180deg,_rgba(17,24,39,0.92),_rgba(12,10,9,1))]">
+    <main class="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+      <section class="overflow-hidden rounded-[2rem] border border-stone-800 bg-stone-900/80 p-6 shadow-2xl shadow-black/30 backdrop-blur">
+        <div class="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <span class="inline-flex rounded-full border border-cyan-500/40 bg-cyan-500/10 px-3 py-1 text-[0.72rem] uppercase tracking-[0.2em] text-cyan-300">
+              Generated from SQLite state
+            </span>
+            <h1 class="mt-4 text-3xl font-semibold tracking-tight sm:text-4xl">Kraken Bot Status</h1>
+            <p class="mt-3 max-w-3xl text-sm leading-6 text-stone-400">
+              Current bot state, latest market snapshot, strategy decision, and recent trade activity.
+            </p>
+          </div>
+        </div>
+        <div id="market-metrics-grid" class="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {% for metric in market_metrics %}
+            {% include "partials/metric_card.html" %}
+          {% endfor %}
+        </div>
+      </section>
+
+      <section class="section-shell">
+        <div class="section-head">
+          <h2 class="section-title">Live Market Chart</h2>
+          <p class="section-copy">Recent trend-timeframe candles with live EMA overlays and the currently attached range band.</p>
+        </div>
+        <div id="market-chart-root">{{ market_chart_markup | safe }}</div>
+      </section>
+
+      <section class="section-shell">
+        <div class="section-head">
+          <h2 class="section-title">Decision Context</h2>
+        </div>
+        <p id="trade-counts" class="text-sm text-stone-400">Trade counts: {{ trade_counts }}</p>
+        <div id="regime-reason" class="reason-box"><strong>Regime Reason:</strong> {{ regime_reason }}</div>
+        <div id="decision-reason" class="reason-box"><strong>Decision Reason:</strong> {{ decision_reason }}</div>
+      </section>
+
+      <section class="section-shell">
+        <div class="section-head">
+          <h2 id="strategy-rules-title" class="section-title">{{ rules_title }}</h2>
+          <p class="section-copy">Rule-by-rule view of the latest strategy evaluation based on persisted snapshot and portfolio state.</p>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full min-w-[680px] border-collapse text-left font-mono text-sm">
+            <thead class="text-stone-400">
+              <tr>
+                <th class="border-b border-stone-800 px-3 py-3 font-medium">Rule</th>
+                <th class="border-b border-stone-800 px-3 py-3 font-medium">State</th>
+                <th class="border-b border-stone-800 px-3 py-3 font-medium">Detail</th>
+              </tr>
+            </thead>
+            <tbody id="rules-table-body">
+              {% for rule in strategy_rules %}
+                <tr>
+                  <td class="border-b border-stone-900 px-3 py-3 align-top">{{ rule.label }}</td>
+                  <td class="border-b border-stone-900 px-3 py-3 align-top">
+                    <span class="rule-pill {{ rule.state_class }}">{{ rule.state }}</span>
+                  </td>
+                  <td class="border-b border-stone-900 px-3 py-3 align-top">{{ rule.detail }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="section-shell">
+        <div class="section-head">
+          <h2 class="section-title">Runtime</h2>
+        </div>
+        <div id="runtime-grid" class="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+          {% for metric in runtime_metrics %}
+            {% include "partials/metric_card.html" %}
+          {% endfor %}
+        </div>
+      </section>
+
+      <section class="section-shell">
+        <div class="section-head">
+          <h2 class="section-title">Performance</h2>
+        </div>
+        <div class="grid gap-5 xl:grid-cols-2">
+          {% for panel in performance_panels %}
+            {% include "partials/performance_panel.html" %}
+          {% endfor %}
+        </div>
+      </section>
+
+      <section class="section-shell">
+        <div class="section-head">
+          <h2 class="section-title">Open Trade</h2>
+        </div>
+        <div id="open-trade-root">
+          {% if open_trade %}
+            <div class="overflow-x-auto">
+              <table class="w-full min-w-[640px] border-collapse font-mono text-sm">
+                <thead class="text-left text-stone-400">
+                  <tr>
+                    <th class="border-b border-stone-800 px-3 py-3 font-medium">Trade ID</th>
+                    <th class="border-b border-stone-800 px-3 py-3 font-medium">Qty</th>
+                    <th class="border-b border-stone-800 px-3 py-3 font-medium">Buy Price</th>
+                    <th class="border-b border-stone-800 px-3 py-3 font-medium">Buy Time</th>
+                    <th class="border-b border-stone-800 px-3 py-3 font-medium">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td class="border-b border-stone-900 px-3 py-3">{{ open_trade.id }}</td>
+                    <td class="border-b border-stone-900 px-3 py-3">{{ open_trade.quantity }}</td>
+                    <td class="border-b border-stone-900 px-3 py-3">{{ open_trade.buy_price }}</td>
+                    <td class="border-b border-stone-900 px-3 py-3">{{ open_trade.buy_time }}</td>
+                    <td class="border-b border-stone-900 px-3 py-3">{{ open_trade.status }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          {% else %}
+            <div class="empty">No open trade</div>
+          {% endif %}
+        </div>
+      </section>
+
+      <section class="section-shell">
+        <div class="section-head">
+          <h2 class="section-title">Recent Orders</h2>
+        </div>
+        <div id="recent-orders-root">
+          <div class="overflow-x-auto">
+            <table class="w-full min-w-[720px] table-fixed border-collapse font-mono text-[0.82rem]">
+              <thead class="text-left text-stone-400">
+                <tr>
+                  <th class="border-b border-stone-800 px-3 py-3 font-medium">Order</th>
+                  <th class="border-b border-stone-800 px-3 py-3 font-medium">Execution</th>
+                  <th class="border-b border-stone-800 px-3 py-3 font-medium">Status</th>
+                  <th class="border-b border-stone-800 px-3 py-3 font-medium">Time</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% if recent_orders %}
+                  {% for order in recent_orders %}
+                    <tr class="entry-summary">
+                      <td class="px-3 py-2">{{ order.label }}</td>
+                      <td class="px-3 py-2">{{ order.execution }}</td>
+                      <td class="px-3 py-2">{{ order.state }}</td>
+                      <td class="px-3 py-2">{{ order.timing }}</td>
+                    </tr>
+                    <tr class="entry-detail">
+                      <td colspan="4" class="px-3 pb-3 pt-0">
+                        {% for tag in order.detail_tags %}
+                          <span class="detail-tag">{{ tag }}</span>
+                        {% endfor %}
+                      </td>
+                    </tr>
+                  {% endfor %}
+                {% else %}
+                  <tr>
+                    <td colspan="4" class="border-b border-stone-900 px-3 py-3 text-stone-500">No data</td>
+                  </tr>
+                {% endif %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="section-shell">
+        <div class="section-head">
+          <h2 class="section-title">Kraken Open Orders</h2>
+          <p id="exchange-open-orders-summary" class="section-copy">{{ exchange_open_orders_summary }}</p>
+        </div>
+        <div id="exchange-open-orders-root">
+          <div class="overflow-x-auto">
+            <table class="w-full min-w-[900px] border-collapse font-mono text-sm">
+              <thead class="text-left text-stone-400">
+                <tr>
+                  {% for header in exchange_open_order_headers %}
+                    <th class="border-b border-stone-800 px-3 py-3 font-medium">{{ header }}</th>
+                  {% endfor %}
+                </tr>
+              </thead>
+              <tbody>
+                {% if exchange_open_orders %}
+                  {% for row in exchange_open_orders %}
+                    <tr>
+                      {% for cell in row %}
+                        <td class="border-b border-stone-900 px-3 py-3 align-top">{{ cell }}</td>
+                      {% endfor %}
+                    </tr>
+                  {% endfor %}
+                {% else %}
+                  <tr>
+                    <td colspan="{{ exchange_open_order_headers|length }}" class="border-b border-stone-900 px-3 py-3 text-stone-500">No data</td>
+                  </tr>
+                {% endif %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="section-shell">
+        <div class="section-head">
+          <h2 class="section-title">Recent Trades</h2>
+        </div>
+        <div id="recent-trades-root">
+          <div class="overflow-x-auto">
+            <table class="w-full min-w-[720px] table-fixed border-collapse font-mono text-[0.82rem]">
+              <thead class="text-left text-stone-400">
+                <tr>
+                  <th class="border-b border-stone-800 px-3 py-3 font-medium">Trade</th>
+                  <th class="border-b border-stone-800 px-3 py-3 font-medium">Execution</th>
+                  <th class="border-b border-stone-800 px-3 py-3 font-medium">Outcome</th>
+                  <th class="border-b border-stone-800 px-3 py-3 font-medium">Created</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% if recent_trades %}
+                  {% for trade in recent_trades %}
+                    <tr class="entry-summary">
+                      <td class="px-3 py-2">{{ trade.label }}</td>
+                      <td class="px-3 py-2">{{ trade.execution }}</td>
+                      <td class="px-3 py-2">{{ trade.outcome }}</td>
+                      <td class="px-3 py-2">{{ trade.timing }}</td>
+                    </tr>
+                    <tr class="entry-detail">
+                      <td colspan="4" class="px-3 pb-3 pt-0">
+                        {% for tag in trade.detail_tags %}
+                          <span class="detail-tag">{{ tag }}</span>
+                        {% endfor %}
+                      </td>
+                    </tr>
+                  {% endfor %}
+                {% else %}
+                  <tr>
+                    <td colspan="4" class="border-b border-stone-900 px-3 py-3 text-stone-500">No data</td>
+                  </tr>
+                {% endif %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="section-shell">
+        <div class="section-head">
+          <h2 class="section-title">Recent Logs</h2>
+        </div>
+        <div id="recent-logs-root">
+          <div class="overflow-x-auto">
+            <table class="w-full min-w-[900px] border-collapse font-mono text-sm">
+              <thead class="text-left text-stone-400">
+                <tr>
+                  {% for header in recent_log_headers %}
+                    <th class="border-b border-stone-800 px-3 py-3 font-medium">{{ header }}</th>
+                  {% endfor %}
+                </tr>
+              </thead>
+              <tbody>
+                {% if recent_logs %}
+                  {% for row in recent_logs %}
+                    <tr>
+                      {% for cell in row %}
+                        <td class="border-b border-stone-900 px-3 py-3 align-top">{{ cell }}</td>
+                      {% endfor %}
+                    </tr>
+                  {% endfor %}
+                {% else %}
+                  <tr>
+                    <td colspan="{{ recent_log_headers|length }}" class="border-b border-stone-900 px-3 py-3 text-stone-500">No data</td>
+                  </tr>
+                {% endif %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div id="dashboard-footer" class="mt-5 text-sm text-stone-400">
+          <span id="dashboard-refresh-meta">Refreshed at {{ generated_at }} · Timezone: {{ timezone_label }}</span>
+          <span> · App Version: <span id="dashboard-app-version">{{ app_version }}</span></span>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="/static/dashboard.js"></script>
+</body>
+</html>

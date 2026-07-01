@@ -1,0 +1,250 @@
+.section-shell {
+  margin-top: 1.25rem;
+  border: 1px solid rgba(41, 37, 36, 0.9);
+  background: rgba(28, 25, 23, 0.92);
+  border-radius: 1.75rem;
+  padding: 1.25rem;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.18);
+}
+
+.section-head {
+  margin-bottom: 1rem;
+}
+
+.section-title {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.section-copy {
+  margin: 0.35rem 0 0;
+  font-size: 0.925rem;
+  line-height: 1.5;
+  color: rgb(168 162 158);
+}
+
+.reason-box {
+  margin-top: 0.85rem;
+  border-left: 3px solid rgba(34, 211, 238, 0.6);
+  border-radius: 1rem;
+  background: rgba(12, 74, 110, 0.16);
+  padding: 0.95rem 1rem;
+  color: rgb(231 229 228);
+}
+
+.empty {
+  border: 1px dashed rgba(87, 83, 78, 0.85);
+  border-radius: 1rem;
+  padding: 1rem;
+  color: rgb(168 162 158);
+}
+
+.detail-tag {
+  display: inline-block;
+  margin: 0 0.5rem 0.5rem 0;
+  border-radius: 9999px;
+  border: 1px solid rgba(69, 10, 10, 0.25);
+  background: rgba(41, 37, 36, 0.85);
+  padding: 0.28rem 0.65rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.74rem;
+  color: rgb(214 211 209);
+}
+
+.entry-summary td {
+  border-bottom: 0;
+  font-weight: 600;
+}
+
+.entry-detail td {
+  border-bottom: 1px solid rgba(28, 25, 23, 1);
+}
+
+.rule-pill {
+  display: inline-flex;
+  border-radius: 9999px;
+  padding: 0.22rem 0.55rem;
+  font-size: 0.73rem;
+  letter-spacing: 0.04em;
+}
+
+.rule-pass {
+  background: rgba(20, 83, 45, 0.35);
+  color: rgb(134 239 172);
+}
+
+.rule-fail {
+  background: rgba(127, 29, 29, 0.35);
+  color: rgb(252 165 165);
+}
+
+.rule-info {
+  background: rgba(12, 74, 110, 0.35);
+  color: rgb(125 211 252);
+}
+
+.rule-unknown {
+  background: rgba(68, 64, 60, 0.45);
+  color: rgb(214 211 209);
+}
+
+.mini-tag {
+  display: inline-flex;
+  border-radius: 9999px;
+  border: 1px solid rgba(69, 10, 10, 0.25);
+  background: rgba(41, 37, 36, 0.82);
+  padding: 0.28rem 0.6rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.76rem;
+  color: rgb(214 211 209);
+}
+
+.chart-shell {
+  border-radius: 1.5rem;
+  border: 1px solid rgba(41, 37, 36, 0.9);
+  background:
+    linear-gradient(180deg, rgba(24, 24, 27, 0.96), rgba(28, 25, 23, 0.96)),
+    radial-gradient(circle at top right, rgba(34, 211, 238, 0.12), transparent 38%);
+  padding: 1rem;
+}
+
+.chart-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.eyebrow {
+  color: rgb(168 162 158);
+  font-size: 0.72rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.chart-frame {
+  margin-top: 0.75rem;
+  overflow: hidden;
+  border-radius: 1.25rem;
+  border: 1px solid rgba(68, 64, 60, 0.9);
+  background: linear-gradient(180deg, rgba(12, 10, 9, 0.95), rgba(28, 25, 23, 1));
+}
+
+#market-chart-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.chart-legend {
+  margin-top: 0.75rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+  color: rgb(168 162 158);
+  font-size: 0.88rem;
+}
+
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.legend-swatch {
+  width: 0.85rem;
+  height: 0.85rem;
+  border-radius: 0.2rem;
+  display: inline-block;
+}
+
+.swatch-candle {
+  background: #16a34a;
+}
+
+.swatch-close {
+  background: #22d3ee;
+}
+
+.swatch-ema-fast {
+  background: #fb923c;
+}
+
+.swatch-ema-slow {
+  background: #a78bfa;
+  border: 1px solid #6d28d9;
+}
+
+.swatch-band {
+  background: rgba(59, 130, 246, 0.25);
+  border: 1px solid rgba(59, 130, 246, 0.55);
+}
+
+.band-zone {
+  fill: rgba(59, 130, 246, 0.14);
+  stroke: rgba(59, 130, 246, 0.42);
+  stroke-dasharray: 6 6;
+}
+
+.price-grid {
+  stroke: rgba(168, 162, 158, 0.18);
+  stroke-width: 1;
+  stroke-dasharray: 3 5;
+}
+
+.line-close {
+  fill: none;
+  stroke: #22d3ee;
+  stroke-width: 2.4;
+  opacity: 0.92;
+}
+
+.line-ema-fast {
+  fill: none;
+  stroke: #fb923c;
+  stroke-width: 2.2;
+}
+
+.line-ema-slow {
+  fill: none;
+  stroke: #a78bfa;
+  stroke-width: 3.2;
+  stroke-dasharray: 10 6;
+  stroke-linecap: round;
+  opacity: 0.98;
+}
+
+.candle-wick {
+  stroke-width: 1.4;
+}
+
+.candle-body {
+  stroke-width: 1;
+}
+
+.candle-up {
+  stroke: #16a34a;
+  fill: #16a34a;
+}
+
+.candle-down {
+  stroke: #ef4444;
+  fill: #ef4444;
+}
+
+.axis-label,
+.price-label {
+  fill: rgb(168 162 158);
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+@media (max-width: 640px) {
+  .section-shell {
+    padding: 1rem;
+    border-radius: 1.35rem;
+  }
+}

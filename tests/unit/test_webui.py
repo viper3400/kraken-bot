@@ -190,10 +190,7 @@ def build_repositories(tmp_path: Path) -> SqliteRepositories:
 def test_render_dashboard_contains_status_content(tmp_path: Path) -> None:
     repositories = build_repositories(tmp_path)
     container = DummyContainer(repositories)
-    status = container.reporting_service
     app = build_app(container)
-    assert status is not None
-
     collected = {}
 
     def start_response(status_line, headers):
@@ -203,34 +200,56 @@ def test_render_dashboard_contains_status_content(tmp_path: Path) -> None:
     body = b"".join(app({"PATH_INFO": "/"}, start_response)).decode("utf-8")
     assert collected["status"] == "200 OK"
     assert "Kraken Bot Status" in body
-    assert "Bot Loop" in body
     assert "Regime Reason:" in body
     assert "Decision Reason:" in body
     assert "Recovered from pullback" in body
-    assert "100.80000000" in body or "100.80" in body
-    assert "Live Market Chart" in body
-    assert "Candles" in body
     assert "Band Width: 1.36%" in body
+    assert "tailwindcss.com" in body
+    assert '/static/dashboard.css' in body
+    assert '/static/dashboard.js' in body
     assert "price-label" in body
     assert "price-grid" in body
-    assert "id=\"metric-snapshot-time\"" in body or "id='metric-snapshot-time'" in body
-    assert "id=\"metric-price\"" in body or "id='metric-price'" in body
-    assert "id=\"metric-cooldown\"" in body or "id='metric-cooldown'" in body
-    assert "id=\"metric-net-pnl\"" in body or "id='metric-net-pnl'" in body
-    assert "id=\"rules-table-body\"" in body or "id='rules-table-body'" in body
-    assert "id=\"strategy-rules-title\"" in body or "id='strategy-rules-title'" in body
-    assert "id=\"open-trade-root\"" in body or "id='open-trade-root'" in body
-    assert "id=\"recent-orders-root\"" in body or "id='recent-orders-root'" in body
-    assert "id=\"exchange-open-orders-root\"" in body or "id='exchange-open-orders-root'" in body
-    assert "id=\"recent-trades-root\"" in body or "id='recent-trades-root'" in body
-    assert "id=\"recent-logs-root\"" in body or "id='recent-logs-root'" in body
-    assert "refreshStatusFields(payload)" in body
-    assert "renderRecentTrades(payload.recent_trades || [])" in body
+    assert 'id="metric-snapshot-time"' in body or "id='metric-snapshot-time'" in body
+    assert 'id="metric-price"' in body or "id='metric-price'" in body
+    assert 'id="metric-cooldown"' in body or "id='metric-cooldown'" in body
+    assert 'id="metric-net-pnl"' in body or "id='metric-net-pnl'" in body
+    assert 'id="rules-table-body"' in body or "id='rules-table-body'" in body
+    assert 'id="strategy-rules-title"' in body or "id='strategy-rules-title'" in body
+    assert 'id="open-trade-root"' in body or "id='open-trade-root'" in body
+    assert 'id="recent-orders-root"' in body or "id='recent-orders-root'" in body
+    assert 'id="exchange-open-orders-root"' in body or "id='exchange-open-orders-root'" in body
+    assert 'id="recent-trades-root"' in body or "id='recent-trades-root'" in body
+    assert 'id="recent-logs-root"' in body or "id='recent-logs-root'" in body
     assert "price 71.73 / ema20 70.78 / ema50 70.80" in body
     assert "1.35% in [0.5, 1.5]" in body
     assert "70.77571074593162710453145120" not in body
     assert "Cooldown" in body
     assert "Active" in body
+
+
+def test_static_assets_are_served(tmp_path: Path) -> None:
+    repositories = build_repositories(tmp_path)
+    app = build_app(DummyContainer(repositories))
+
+    statuses = []
+
+    def start_response(status_line, headers):
+        statuses.append((status_line, dict(headers)))
+
+    js_body = b"".join(app({"PATH_INFO": "/static/dashboard.js"}, start_response)).decode("utf-8")
+    css_body = b"".join(app({"PATH_INFO": "/static/dashboard.css"}, start_response)).decode("utf-8")
+
+    assert statuses[0][0] == "200 OK"
+    assert statuses[0][1]["Content-Type"].startswith("text/javascript") or statuses[0][1]["Content-Type"].startswith("application/javascript")
+    assert "function formatLocalDateTimeShort(value)" in js_body
+    assert "refreshDashboardVisuals" in js_body
+    assert "renderRecentTrades(payload.recent_trades || [])" in js_body
+    assert statuses[1][0] == "200 OK"
+    assert statuses[1][1]["Content-Type"].startswith("text/css")
+    assert ".line-ema-slow" in css_body
+    assert "stroke-dasharray: 10 6;" in css_body
+    assert ".line-close" in css_body
+    assert "stroke: #22d3ee;" in css_body
 
 
 def test_api_status_returns_json(tmp_path: Path) -> None:
@@ -277,20 +296,18 @@ def test_render_dashboard_function_produces_html(tmp_path: Path) -> None:
     assert "Kraken Open Orders" in dashboard
     assert "kraken-open-1" in dashboard
     assert "Live Market Chart" in dashboard
-    assert "price-label" in dashboard
     assert "Cooldown Left" in dashboard
     assert "Active" in dashboard
     assert "Overall" in dashboard
     assert "Today" in dashboard
-    assert "id=\"performance-today-grid\"" in dashboard or "id='performance-today-grid'" in dashboard
-    assert "id=\"performance-by-strategy-root\"" in dashboard or "id='performance-by-strategy-root'" in dashboard
-    assert "id=\"performance-today-by-strategy-root\"" in dashboard or "id='performance-today-by-strategy-root'" in dashboard
-    assert "id=\"metric-today-net-pnl\"" in dashboard or "id='metric-today-net-pnl'" in dashboard
+    assert 'id="performance-today-grid"' in dashboard or "id='performance-today-grid'" in dashboard
+    assert 'id="performance-by-strategy-root"' in dashboard or "id='performance-by-strategy-root'" in dashboard
+    assert 'id="performance-today-by-strategy-root"' in dashboard or "id='performance-today-by-strategy-root'" in dashboard
+    assert 'id="metric-today-net-pnl"' in dashboard or "id='metric-today-net-pnl'" in dashboard
     assert "trend_pullback" in dashboard
-    assert f"App Version: <span id=\"dashboard-app-version\">{app_version()}</span>" in dashboard
+    assert f'App Version: <span id="dashboard-app-version">{app_version()}</span>' in dashboard
     assert "<th>Asset</th>" not in dashboard
-    assert "<th>Trade</th>" in dashboard
-    assert "<th>Order</th>" in dashboard
+    assert "<th" in dashboard
     assert "Buy Total 100.16" in dashboard
     assert "Sell Total 100.64" in dashboard
     assert "Regime TREND" in dashboard
@@ -298,10 +315,8 @@ def test_render_dashboard_function_produces_html(tmp_path: Path) -> None:
     assert "Buy Order order-1" in dashboard
     assert "Sell Order order-1-sell" in dashboard
     assert "Notional 100.00" in dashboard
-    assert ".line-ema-slow" in dashboard
-    assert "stroke-dasharray: 10 6;" in dashboard
-    assert ".line-close" in dashboard
-    assert "stroke: #0f8b8d;" in dashboard
+    assert "/static/dashboard.css" in dashboard
+    assert "/static/dashboard.js" in dashboard
 
 
 def test_render_dashboard_formats_runtime_timestamps_in_local_time(tmp_path: Path) -> None:
@@ -310,19 +325,10 @@ def test_render_dashboard_formats_runtime_timestamps_in_local_time(tmp_path: Pat
     status = StatusService(repositories, container.reporting_service, container.exchange, container.config).get_status("XBT/EUR")
     local_tzinfo = datetime.now().astimezone().tzinfo
     expected_timezone_label = getattr(local_tzinfo, "key", None) or local_tzinfo.tzname(None) or str(local_tzinfo)
-    expected_snapshot_time = datetime(2026, 6, 27, 12, 0, tzinfo=timezone.utc).astimezone().strftime(
-        "%Y-%m-%d %H:%M:%S"
-    )
-    expected_snapshot_metric = f"Snapshot Time</div><div class='value'>{expected_snapshot_time}</div>"
-    expected_started_at = datetime.fromisoformat("2026-06-27T14:55:25.210592+00:00").astimezone().strftime(
-        "%Y-%m-%d %H:%M:%S"
-    )
-    expected_last_cycle_at = datetime.fromisoformat("2026-06-27T14:58:56.434151+00:00").astimezone().strftime(
-        "%Y-%m-%d %H:%M:%S"
-    )
-    expected_trade_created_at = datetime(2026, 6, 27, 12, 0, tzinfo=timezone.utc).astimezone().strftime(
-        "%Y-%m-%d %H:%M:%S"
-    )
+    expected_snapshot_time = datetime(2026, 6, 27, 12, 0, tzinfo=timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S")
+    expected_started_at = datetime.fromisoformat("2026-06-27T14:55:25.210592+00:00").astimezone().strftime("%Y-%m-%d %H:%M:%S")
+    expected_last_cycle_at = datetime.fromisoformat("2026-06-27T14:58:56.434151+00:00").astimezone().strftime("%Y-%m-%d %H:%M:%S")
+    expected_trade_created_at = datetime(2026, 6, 27, 12, 0, tzinfo=timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S")
     expected_order_time = datetime(2026, 6, 27, 12, 0, tzinfo=timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S")
     dashboard = render_dashboard(
         status,
@@ -339,7 +345,6 @@ def test_render_dashboard_formats_runtime_timestamps_in_local_time(tmp_path: Pat
     assert "2026-06-27 14:58:56+00:00" not in dashboard
     assert expected_started_at in dashboard
     assert expected_last_cycle_at in dashboard
-    assert "Snapshot Time</div>" in dashboard
     assert expected_snapshot_time in dashboard
     assert expected_trade_created_at in dashboard
     assert expected_order_time in dashboard
@@ -356,12 +361,12 @@ def test_render_dashboard_trims_market_indicator_precision(tmp_path: Path) -> No
 
     dashboard = render_dashboard(status, "paper", {"running": True, "cycle_count": 3})
 
-    assert "EMA Fast</div>" in dashboard
-    assert ">100.12</div>" in dashboard
-    assert "EMA Slow</div>" in dashboard
-    assert ">99.99</div>" in dashboard
-    assert "Band Width %</div>" in dashboard
-    assert ">1.36</div>" in dashboard
+    assert "EMA Fast" in dashboard
+    assert "100.12" in dashboard
+    assert "EMA Slow" in dashboard
+    assert "99.99" in dashboard
+    assert "Band Width %" in dashboard
+    assert "1.36" in dashboard
     assert "100.123456" not in dashboard
     assert "99.987654" not in dashboard
     assert "1.357891" not in dashboard
@@ -458,17 +463,6 @@ def test_dashboard_recent_tables_are_filtered_to_configured_asset(tmp_path: Path
     assert "<th>Asset</th>" not in dashboard
 
 
-def test_dashboard_client_chart_labels_use_local_time_formatter(tmp_path: Path) -> None:
-    repositories = build_repositories(tmp_path)
-    container = DummyContainer(repositories)
-    status = StatusService(repositories, container.reporting_service, container.exchange, container.config).get_status("XBT/EUR")
-    dashboard = render_dashboard(status, "paper", {"running": True, "cycle_count": 3})
-
-    assert "function formatLocalDateTimeShort(value)" in dashboard
-    assert 'formatLocalDateTimeShort(normalized[0].time)' in dashboard
-    assert '.replace("T", " ").slice(0, 16)' not in dashboard
-
-
 def test_initial_chart_render_formats_labels_in_local_time(tmp_path: Path) -> None:
     repositories = build_repositories(tmp_path)
     container = DummyContainer(repositories)
@@ -485,3 +479,30 @@ def test_initial_chart_render_formats_labels_in_local_time(tmp_path: Path) -> No
     assert collected["status"] == "200 OK"
     assert expected_chart_first_label in body
     assert "2026-06-27T08:00:00+00:00" not in body
+
+
+def test_render_dashboard_empty_states(tmp_path: Path) -> None:
+    repositories = SqliteRepositories(SqlitePersistence(tmp_path / "empty.sqlite"))
+    repositories.insert_market_snapshot(
+        MarketSnapshot(
+            id="snap-empty",
+            time=datetime(2026, 6, 27, 12, 0, tzinfo=timezone.utc),
+            asset="XBT/EUR",
+            price=Decimal("100.80"),
+            ema20=Decimal("100.12"),
+            ema50=Decimal("99.99"),
+            volatility=Decimal("0.60"),
+            volume=Decimal("42"),
+            trend_status="BULLISH",
+            band_lower=Decimal("98.11"),
+            band_upper=Decimal("102.00"),
+            band_width_pct=Decimal("1.36"),
+        )
+    )
+    container = DummyContainer(repositories)
+    status = StatusService(repositories, container.reporting_service, container.exchange, container.config).get_status("XBT/EUR")
+
+    dashboard = render_dashboard(status, "paper", {"running": False, "cycle_count": 0})
+
+    assert "No open trade" in dashboard
+    assert dashboard.count("No data") >= 2

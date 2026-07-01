@@ -1,0 +1,27 @@
+<div class="rounded-3xl border border-stone-800 bg-stone-900/90 p-5 shadow-lg shadow-black/20">
+  <div class="mb-4 flex flex-col gap-2 border-b border-stone-800/80 pb-4 sm:flex-row sm:items-baseline sm:justify-between">
+    <h3 class="text-sm font-semibold uppercase tracking-[0.2em] text-stone-300">{{ panel.title }}</h3>
+    <span class="font-mono text-xs text-stone-500">{{ panel.note }}</span>
+  </div>
+  <div class="grid grid-cols-2 gap-3 xl:grid-cols-4{% if panel.root_id %}" id="{{ panel.root_id }}{% endif %}">
+    {% for metric in panel.metrics %}
+      {% include "partials/metric_card.html" %}
+    {% endfor %}
+  </div>
+  <div{% if panel.strategy_root_id %} id="{{ panel.strategy_root_id }}"{% endif %} class="mt-4">
+    {% if panel.strategy_sections %}
+      {% for section in panel.strategy_sections %}
+        <div class="{% if not loop.first %}mt-4 border-t border-stone-800 pt-4{% endif %}">
+          <h4 class="mb-3 font-mono text-sm text-stone-100">{{ section.name }}</h4>
+          <div class="grid grid-cols-2 gap-3 xl:grid-cols-4">
+            {% for metric in section.metrics %}
+              {% include "partials/metric_card.html" %}
+            {% endfor %}
+          </div>
+        </div>
+      {% endfor %}
+    {% else %}
+      <div class="empty">{{ panel.empty_label }}</div>
+    {% endif %}
+  </div>
+</div>

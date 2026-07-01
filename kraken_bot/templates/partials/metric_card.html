@@ -1,0 +1,6 @@
+<article class="rounded-2xl border border-stone-800/80 bg-stone-900/80 p-4 shadow-sm shadow-black/20">
+  <div class="text-[0.72rem] uppercase tracking-[0.18em] text-stone-400">{{ metric.label }}</div>
+  <div{% if metric.id %} id="{{ metric.id }}"{% endif %} class="mt-2 break-words font-mono text-[1.02rem] text-cyan-300">
+    {{ metric.value }}
+  </div>
+</article>
