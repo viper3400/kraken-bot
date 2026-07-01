@@ -28,6 +28,9 @@ class BotStatus:
     exchange_open_orders_error: str | None
     recent_logs: list[LogEntry]
     report_metrics: ReportMetrics
+    today_report_metrics: ReportMetrics
+    strategy_report_metrics: dict[str, ReportMetrics]
+    today_strategy_report_metrics: dict[str, ReportMetrics]
     trade_counts: dict[str, int]
     cooldown_status: "CooldownStatus"
 
@@ -61,9 +64,10 @@ class StatusService:
     ) -> BotStatus:
         if exchange_open_orders is None and exchange_open_orders_error is None:
             exchange_open_orders, exchange_open_orders_error = self.fetch_exchange_open_orders(asset)
+        generated_at = datetime.now(timezone.utc)
         return BotStatus(
             asset=asset,
-            generated_at=datetime.now(timezone.utc),
+            generated_at=generated_at,
             latest_market_snapshot=self.repositories.get_latest_market_snapshot(asset),
             latest_strategy_decision=self.repositories.get_latest_strategy_decision(asset),
             open_trade=self.repositories.get_open_trade(asset),
@@ -74,6 +78,9 @@ class StatusService:
             exchange_open_orders_error=exchange_open_orders_error,
             recent_logs=self.repositories.list_recent_logs(limit=20),
             report_metrics=self.reporting_service.build_report(),
+            today_report_metrics=self.reporting_service.build_report_for_day(generated_at.astimezone().date()),
+            strategy_report_metrics=self.reporting_service.build_report_by_strategy(),
+            today_strategy_report_metrics=self.reporting_service.build_report_for_day_by_strategy(generated_at.astimezone().date()),
             trade_counts=self.repositories.count_trades_by_status(),
             cooldown_status=self._build_cooldown_status(asset),
         )

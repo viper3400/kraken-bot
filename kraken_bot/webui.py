@@ -21,9 +21,6 @@ from kraken_bot.services.market_data_service import calculate_ema
 from kraken_bot.services.status_service import BotStatus, StatusService
 
 _RULE_DETAIL_NUMBER_PATTERN = re.compile(r"(?<![\w.])[-+]?(?:\d+\.\d{3,}|\.\d{3,}|\d+(?:\.\d+)?[eE][-+]?\d+)")
-_DASHBOARD_REFRESH_SECONDS = 15
-
-
 @cache
 def _app_version() -> str:
     pyproject_path = Path(__file__).resolve().parent.parent / "pyproject.toml"
@@ -84,7 +81,7 @@ def _format_money_total(price: Decimal | None, quantity: Decimal, fee: Decimal |
     total = price * quantity
     if fee is not None:
         total = total - fee if subtract_fee else total + fee
-    return StatusService.format_decimal(total)
+    return StatusService.format_decimal(total, places=4)
 
 
 def _local_timezone_label() -> str:
@@ -105,6 +102,39 @@ def _render_metric(label: str, value: str, value_id: str | None = None) -> str:
         f"<div{id_attr} class='value'>{html.escape(value)}</div>"
         "</div>"
     )
+
+
+def _metric_id_slug(value: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9_-]", "-", value or "unknown")
+
+
+def _render_performance_cards(metrics, prefix: str) -> str:
+    cards = [
+        _render_metric("Net PnL", format(metrics.net_profit, "f"), f"metric-{prefix}net-pnl"),
+        _render_metric("Gross PnL", format(metrics.gross_profit, "f"), f"metric-{prefix}gross-pnl"),
+        _render_metric("Fees", format(metrics.fees, "f"), f"metric-{prefix}fees"),
+        _render_metric("Win Rate %", format(metrics.win_rate, "f"), f"metric-{prefix}win-rate"),
+        _render_metric("Trades", str(metrics.total_trades), f"metric-{prefix}total-trades"),
+        _render_metric("Open Trades", str(metrics.open_trades), f"metric-{prefix}open-trades"),
+        _render_metric("Closed Trades", str(metrics.closed_trades), f"metric-{prefix}closed-trades"),
+        _render_metric("Avg Hold", str(metrics.average_holding_duration), f"metric-{prefix}average-hold"),
+    ]
+    return "".join(cards)
+
+
+def _render_strategy_performance_sections(strategy_reports: dict[str, object], prefix: str, empty_label: str) -> str:
+    if not strategy_reports:
+        return f"<div class='empty'>{html.escape(empty_label)}</div>"
+    sections: list[str] = []
+    for strategy_name, metrics in strategy_reports.items():
+        safe_strategy_name = _metric_id_slug(strategy_name)
+        sections.append(
+            "<div class='strategy-performance-block'>"
+            f"<h4 class='strategy-performance-title'>{html.escape(strategy_name)}</h4>"
+            f"<div class='performance-grid compact-grid'>{_render_performance_cards(metrics, f'{prefix}{safe_strategy_name}-')}</div>"
+            "</div>"
+        )
+    return "".join(sections)
 
 
 def _render_table(headers: list[str], rows: list[list[str]], table_class: str = "") -> str:
@@ -135,7 +165,7 @@ def _render_recent_trades_table(trades: list) -> str:
         detail = _render_detail_tags([
             f"Buy Total {_format_money_total(trade.buy_price, trade.quantity, trade.buy_fee)}",
             f"Sell Total {_format_money_total(trade.sell_price, trade.quantity, trade.sell_fee, subtract_fee=True)}",
-            f"Fees {StatusService.format_decimal(trade.total_fees if trade.total_fees is not None else trade.buy_fee + trade.sell_fee)}",
+            f"Fees {StatusService.format_decimal(trade.total_fees if trade.total_fees is not None else trade.buy_fee + trade.sell_fee, places=4)}",
             f"Held {_format_duration_seconds(trade.holding_duration_seconds)}",
             f"Regime {trade.regime.value if trade.regime else '-'}",
             f"Strategy {trade.strategy_name or '-'}",
@@ -266,10 +296,11 @@ def _build_market_chart(container: Container, latest_snapshot) -> dict[str, obje
     timeframe = getattr(trend_config, "trend_timeframe", "5m")
     ema_fast = getattr(trend_config, "ema_fast", 20)
     ema_slow = getattr(trend_config, "ema_slow", 50)
+    candle_limit = max(48, int(ema_fast), int(ema_slow) + 20)
     asset = container.config.bot.asset
 
     try:
-        candles = container.exchange.get_ohlc(asset, timeframe, 48)
+        candles = container.exchange.get_ohlc(asset, timeframe, candle_limit)
     except (KrakenApiError, ValueError, AttributeError) as exc:
         return {"asset": asset, "timeframe": timeframe, "candles": [], "error": str(exc)}
 
@@ -480,8 +511,12 @@ def render_dashboard(
     latest_decision = status.latest_strategy_decision
     open_trade = status.open_trade
     metrics = status.report_metrics
+    today_metrics = status.today_report_metrics
+    strategy_metrics = status.strategy_report_metrics
+    today_strategy_metrics = status.today_strategy_report_metrics
     cooldown_status = status.cooldown_status
     runtime = runtime or {}
+    refresh_seconds = max(int(runtime.get("polling_interval_seconds") or 30), 1)
     strategy_snapshot = _strategy_snapshot(status)
     rules_title = "SELL Rules" if strategy_snapshot["context"] == "sell" else "BUY Rules"
 
@@ -516,16 +551,18 @@ def render_dashboard(
         _render_metric("Last Cycle", _format_local_datetime(runtime.get("last_cycle_at")), "runtime-last-cycle"),
         _render_metric("Last Error", str(runtime.get("last_error") or "-"), "runtime-last-error"),
     ]
-    pnl_cards = [
-        _render_metric("Net PnL", format(metrics.net_profit, "f"), "metric-net-pnl"),
-        _render_metric("Gross PnL", format(metrics.gross_profit, "f"), "metric-gross-pnl"),
-        _render_metric("Fees", format(metrics.fees, "f"), "metric-fees"),
-        _render_metric("Win Rate %", format(metrics.win_rate, "f"), "metric-win-rate"),
-        _render_metric("Trades", str(metrics.total_trades), "metric-total-trades"),
-        _render_metric("Open Trades", str(metrics.open_trades), "metric-open-trades"),
-        _render_metric("Closed Trades", str(metrics.closed_trades), "metric-closed-trades"),
-        _render_metric("Avg Hold", str(metrics.average_holding_duration), "metric-average-hold"),
-    ]
+    overall_pnl_cards = _render_performance_cards(metrics, "")
+    today_pnl_cards = _render_performance_cards(today_metrics, "today-")
+    overall_strategy_sections = _render_strategy_performance_sections(
+        strategy_metrics,
+        "strategy-",
+        "No strategy-specific performance yet",
+    )
+    today_strategy_sections = _render_strategy_performance_sections(
+        today_strategy_metrics,
+        "today-strategy-",
+        "No strategy-specific performance for today",
+    )
     open_trade_markup = (
         _render_table(
             ["Trade ID", "Qty", "Buy Price", "Buy Time", "Status"],
@@ -830,13 +867,14 @@ def render_dashboard(
       background: #1b6b43;
     }}
     .swatch-close {{
-      background: #155e63;
+      background: #0f8b8d;
     }}
     .swatch-ema-fast {{
       background: #d37b32;
     }}
     .swatch-ema-slow {{
-      background: #7057b2;
+      background: #7c3aed;
+      border: 1px solid #4c1d95;
     }}
     .swatch-band {{
       background: rgba(66, 129, 182, 0.25);
@@ -854,8 +892,9 @@ def render_dashboard(
     }}
     .line-close {{
       fill: none;
-      stroke: #155e63;
-      stroke-width: 2;
+      stroke: #0f8b8d;
+      stroke-width: 2.4;
+      opacity: 0.92;
     }}
     .line-ema-fast {{
       fill: none;
@@ -864,8 +903,11 @@ def render_dashboard(
     }}
     .line-ema-slow {{
       fill: none;
-      stroke: #7057b2;
-      stroke-width: 2.2;
+      stroke: #7c3aed;
+      stroke-width: 3.2;
+      stroke-dasharray: 10 6;
+      stroke-linecap: round;
+      opacity: 0.98;
     }}
     .candle-wick {{
       stroke-width: 1.4;
@@ -874,12 +916,12 @@ def render_dashboard(
       stroke-width: 1;
     }}
     .candle-up {{
-      stroke: #1b6b43;
-      fill: #1b6b43;
+      stroke: #2e7d32;
+      fill: #2e7d32;
     }}
     .candle-down {{
-      stroke: #9d3c2b;
-      fill: #9d3c2b;
+      stroke: #c04b32;
+      fill: #c04b32;
     }}
     .axis-label {{
       fill: #6f756e;
@@ -896,10 +938,88 @@ def render_dashboard(
       color: var(--muted);
       font-size: 0.9rem;
     }}
+    .subsection-title {{
+      margin: 0;
+      font-size: 1rem;
+      color: var(--muted);
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }}
+    .performance-section {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 14px;
+      margin-top: 14px;
+    }}
+    .performance-panel {{
+      padding: 14px;
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.7), rgba(247,241,231,0.92));
+    }}
+    .performance-panel-header {{
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid rgba(217, 208, 194, 0.8);
+    }}
+    .performance-panel-note {{
+      color: var(--muted);
+      font-size: 0.82rem;
+      font-family: var(--mono);
+      white-space: nowrap;
+    }}
+    .performance-grid {{
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+    }}
+    .compact-grid {{
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      margin-top: 0;
+    }}
+    .performance-grid .card.metric,
+    .compact-grid .card.metric {{
+      padding: 10px 10px 9px;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.82);
+    }}
+    .performance-grid .metric .label,
+    .compact-grid .metric .label {{
+      font-size: 0.72rem;
+      letter-spacing: 0.05em;
+    }}
+    .performance-grid .metric .value,
+    .compact-grid .metric .value {{
+      margin-top: 5px;
+      font-size: 0.96rem;
+      line-height: 1.15;
+    }}
+    .strategy-performance-block {{
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid var(--border);
+    }}
+    .strategy-performance-title {{
+      margin: 0 0 8px;
+      font-size: 0.9rem;
+      color: var(--ink);
+      font-family: var(--mono);
+    }}
     @media (max-width: 760px) {{
       .two-col {{ grid-template-columns: 1fr; }}
       .wrap {{ padding: 16px 12px 28px; }}
       .hero, .section {{ border-radius: 14px; }}
+      .performance-section {{ grid-template-columns: 1fr; }}
+      .performance-grid,
+      .compact-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+      .performance-panel-header {{
+        flex-direction: column;
+        align-items: flex-start;
+      }}
     }}
   </style>
 </head>
@@ -944,7 +1064,24 @@ def render_dashboard(
     </section>
     <section class="section">
       <h2>Performance</h2>
-      <div class="grid" id="performance-grid">{''.join(pnl_cards)}</div>
+      <div class="performance-section">
+        <div class="performance-panel">
+          <div class="performance-panel-header">
+            <h3 class="subsection-title">Overall</h3>
+            <span class="performance-panel-note">All recorded trades</span>
+          </div>
+          <div class="performance-grid" id="performance-grid">{overall_pnl_cards}</div>
+          <div id="performance-by-strategy-root">{overall_strategy_sections}</div>
+        </div>
+        <div class="performance-panel">
+          <div class="performance-panel-header">
+            <h3 class="subsection-title">Today</h3>
+            <span class="performance-panel-note">Current local day</span>
+          </div>
+          <div class="performance-grid" id="performance-today-grid">{today_pnl_cards}</div>
+          <div id="performance-today-by-strategy-root">{today_strategy_sections}</div>
+        </div>
+      </div>
     </section>
     <section class="section">
       <h2>Open Trade</h2>
@@ -1042,7 +1179,7 @@ def render_dashboard(
       let total = priceValue * quantityValue;
       const feeValue = numberOrNull(fee);
       if (feeValue !== null) total = subtractFee ? total - feeValue : total + feeValue;
-      return formatDecimal(total);
+      return formatDecimal(total, 4);
     }}
 
     function formatRuleDetail(detail) {{
@@ -1098,15 +1235,62 @@ def render_dashboard(
       }}).join("") || '<tr><td colspan="3">No data</td></tr>';
     }}
 
-    function renderPerformance(reportMetrics) {{
-      setText("metric-net-pnl", formatDecimal(reportMetrics?.net_profit));
-      setText("metric-gross-pnl", formatDecimal(reportMetrics?.gross_profit));
-      setText("metric-fees", formatDecimal(reportMetrics?.fees));
-      setText("metric-win-rate", formatDecimal(reportMetrics?.win_rate));
-      setText("metric-total-trades", String(reportMetrics?.total_trades ?? 0));
-      setText("metric-open-trades", String(reportMetrics?.open_trades ?? 0));
-      setText("metric-closed-trades", String(reportMetrics?.closed_trades ?? 0));
-      setText("metric-average-hold", String(reportMetrics?.average_holding_duration ?? "-"));
+    function renderPerformance(prefix, reportMetrics) {{
+      const idPrefix = prefix ? `${{prefix}}-` : "";
+      setText(`metric-${{idPrefix}}net-pnl`, formatDecimal(reportMetrics?.net_profit));
+      setText(`metric-${{idPrefix}}gross-pnl`, formatDecimal(reportMetrics?.gross_profit));
+      setText(`metric-${{idPrefix}}fees`, formatDecimal(reportMetrics?.fees));
+      setText(`metric-${{idPrefix}}win-rate`, formatDecimal(reportMetrics?.win_rate));
+      setText(`metric-${{idPrefix}}total-trades`, String(reportMetrics?.total_trades ?? 0));
+      setText(`metric-${{idPrefix}}open-trades`, String(reportMetrics?.open_trades ?? 0));
+      setText(`metric-${{idPrefix}}closed-trades`, String(reportMetrics?.closed_trades ?? 0));
+      setText(`metric-${{idPrefix}}average-hold`, String(reportMetrics?.average_holding_duration ?? "-"));
+    }}
+
+    function escapeStrategyMetricPrefix(value) {{
+      return String(value || "unknown").replaceAll(/[^a-zA-Z0-9_-]/g, "-");
+    }}
+
+    function renderStrategyPerformance(containerId, strategyReports, prefix, emptyLabel) {{
+      const root = document.getElementById(containerId);
+      if (!root) return;
+      const entries = Object.entries(strategyReports || {{}});
+      if (!entries.length) {{
+        root.innerHTML = `<div class="empty">${{escapeHtml(emptyLabel)}}</div>`;
+        return;
+      }}
+      root.innerHTML = entries.map(([strategyName]) => {{
+        const safePrefix = `${{prefix}}${{escapeStrategyMetricPrefix(strategyName)}}-`;
+        return `
+          <div class="strategy-performance-block">
+            <h4 class="strategy-performance-title">${{escapeHtml(strategyName)}}</h4>
+            <div class="grid">
+              ${{
+                renderMetricCard("Net PnL", `metric-${{safePrefix}}net-pnl`) +
+                renderMetricCard("Gross PnL", `metric-${{safePrefix}}gross-pnl`) +
+                renderMetricCard("Fees", `metric-${{safePrefix}}fees`) +
+                renderMetricCard("Win Rate %", `metric-${{safePrefix}}win-rate`) +
+                renderMetricCard("Trades", `metric-${{safePrefix}}total-trades`) +
+                renderMetricCard("Open Trades", `metric-${{safePrefix}}open-trades`) +
+                renderMetricCard("Closed Trades", `metric-${{safePrefix}}closed-trades`) +
+                renderMetricCard("Avg Hold", `metric-${{safePrefix}}average-hold`)
+              }}
+            </div>
+          </div>
+        `;
+      }}).join("");
+      for (const [strategyName, metrics] of entries) {{
+        renderPerformance(`${{prefix}}${{escapeStrategyMetricPrefix(strategyName)}}`, metrics);
+      }}
+    }}
+
+    function renderMetricCard(label, valueId) {{
+      return `
+        <div class="card metric">
+          <div class="label">${{escapeHtml(label)}}</div>
+          <div id="${{escapeHtml(valueId)}}" class="value">-</div>
+        </div>
+      `;
     }}
 
     function renderOpenTrade(openTrade) {{
@@ -1189,7 +1373,7 @@ def render_dashboard(
         const detail = renderDetailTags([
           `Buy Total ${{formatMoneyTotal(trade.buy_price, trade.quantity, trade.buy_fee, false)}}`,
           `Sell Total ${{formatMoneyTotal(trade.sell_price, trade.quantity, trade.sell_fee, true)}}`,
-          `Fees ${{formatDecimal(trade.total_fees ?? ((numberOrNull(trade.buy_fee) ?? 0) + (numberOrNull(trade.sell_fee) ?? 0)))}}`,
+          `Fees ${{formatDecimal(trade.total_fees ?? ((numberOrNull(trade.buy_fee) ?? 0) + (numberOrNull(trade.sell_fee) ?? 0)), 4)}}`,
           `Held ${{formatDurationSeconds(trade.holding_duration_seconds)}}`,
           `Regime ${{String(trade.regime || "-")}}`,
           `Strategy ${{String(trade.strategy_name || "-")}}`,
@@ -1289,7 +1473,20 @@ def render_dashboard(
 
       setText("dashboard-app-version", payload.app_version || "unknown");
 
-      renderPerformance(payload.report_metrics || null);
+      renderPerformance("", payload.report_metrics || null);
+      renderPerformance("today", payload.today_report_metrics || null);
+      renderStrategyPerformance(
+        "performance-by-strategy-root",
+        payload.strategy_report_metrics || {{}},
+        "strategy-",
+        "No strategy-specific performance yet"
+      );
+      renderStrategyPerformance(
+        "performance-today-by-strategy-root",
+        payload.today_strategy_report_metrics || {{}},
+        "today-strategy-",
+        "No strategy-specific performance for today"
+      );
       renderOpenTrade(payload.open_trade || null);
       renderRecentOrders(payload.recent_orders || []);
       renderExchangeOpenOrders(payload.asset || "-", payload.exchange_open_orders || [], payload.exchange_open_orders_error || null);
@@ -1450,7 +1647,7 @@ def render_dashboard(
     }}
 
     refreshDashboardVisuals();
-    window.setInterval(refreshDashboardVisuals, {_DASHBOARD_REFRESH_SECONDS * 1000});
+    window.setInterval(refreshDashboardVisuals, {refresh_seconds * 1000});
   </script>
 </body>
 </html>"""
@@ -1474,7 +1671,7 @@ def build_app(container: Container, loop_controller: BotLoopController | None = 
         exchange_open_orders, exchange_open_orders_error = status_service.fetch_exchange_open_orders(asset)
         latest_snapshot = container.repositories.get_latest_market_snapshot(asset)
         market_chart = _build_market_chart(container, latest_snapshot)
-        ttl_seconds = _DASHBOARD_REFRESH_SECONDS
+        ttl_seconds = max(int(container.config.bot.polling_interval_seconds), 1)
 
         exchange_cache["exchange_open_orders"] = exchange_open_orders
         exchange_cache["exchange_open_orders_error"] = exchange_open_orders_error
@@ -1567,6 +1764,9 @@ def _status_to_dict(
         "recent_logs": normalize(status.recent_logs),
         "trade_counts": normalize(status.trade_counts),
         "report_metrics": normalize(status.report_metrics),
+        "today_report_metrics": normalize(status.today_report_metrics),
+        "strategy_report_metrics": normalize(status.strategy_report_metrics),
+        "today_strategy_report_metrics": normalize(status.today_strategy_report_metrics),
         "cooldown_status": normalize(status.cooldown_status),
         "strategy_rules": normalize(_strategy_snapshot(status)),
         "market_chart": normalize(market_chart),
